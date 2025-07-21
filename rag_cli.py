@@ -8,11 +8,12 @@ from pathlib import Path
 
 from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain_community.llms import Ollama
-from langchain.chains import RetrievalQA
-from langchain_core.prompts import PromptTemplate
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_ollama import OllamaLLM
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate
 
 class RAGSystem:
     def __init__(self):
@@ -21,7 +22,7 @@ class RAGSystem:
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
-        self.llm = Ollama(model="llama3.2", temperature=0)
+        self.llm = OllamaLLM(model="llama3.2", temperature=0)
         
     def load_existing_db(self, db_path="./chroma_db"):
         """Load existing ChromaDB"""
@@ -56,22 +57,24 @@ class RAGSystem:
         self._setup_qa_chain()
         
     def _setup_qa_chain(self):
-        """Setup the QA chain"""
-        template = """Use the following context and your own knowledge to answer the question comprehensively.
-
-Context from documents: {context}
-
-Question: {question}
-
-Answer:"""
+        """Setup the QA chain using modern LangChain approach"""
+        system_prompt = (
+            "Use the following pieces of retrieved context to answer the question. "
+            "If you don't know the answer, just say that you don't know. "
+            "Use three sentences maximum and keep the answer concise.\n\n"
+            "{context}"
+        )
         
-        prompt = PromptTemplate(template=template, input_variables=["context", "question"])
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", "{input}"),
+        ])
         
-        self.qa_chain = RetrievalQA.from_chain_type(
-            llm=self.llm,
-            chain_type="stuff",
-            retriever=self.vectorstore.as_retriever(search_kwargs={"k": 3}),
-            chain_type_kwargs={"prompt": prompt}
+        question_answer_chain = create_stuff_documents_chain(self.llm, prompt)
+        
+        self.qa_chain = create_retrieval_chain(
+            self.vectorstore.as_retriever(search_kwargs={"k": 3}), 
+            question_answer_chain
         )
     
     async def query(self, question):
@@ -81,8 +84,8 @@ Answer:"""
         
         # Run in thread pool to avoid blocking UI
         loop = asyncio.get_event_loop()
-        answer = await loop.run_in_executor(None, self.qa_chain.run, question)
-        return answer
+        result = await loop.run_in_executor(None, self.qa_chain.invoke, {"input": question})
+        return result["answer"]
 
 class RAGChatApp(App):
     """A Textual app for RAG chat interface."""

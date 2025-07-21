@@ -19,11 +19,12 @@ def test_langchain_imports():
         # Test specific components
         from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
         from langchain_text_splitters import RecursiveCharacterTextSplitter
-        from langchain_community.embeddings import HuggingFaceEmbeddings
-        from langchain_community.vectorstores import Chroma
-        from langchain_community.llms import Ollama
-        from langchain.chains import RetrievalQA
-        from langchain_core.prompts import PromptTemplate
+        from langchain_huggingface import HuggingFaceEmbeddings
+        from langchain_chroma import Chroma
+        from langchain_ollama import OllamaLLM
+        from langchain.chains import create_retrieval_chain
+        from langchain.chains.combine_documents import create_stuff_documents_chain
+        from langchain_core.prompts import ChatPromptTemplate
         
         print("✓ All LangChain imports successful!")
         print(f"✓ LangChain version: {langchain.__version__}")
