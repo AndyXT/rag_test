@@ -115,7 +115,7 @@ class HelpScreen(ModalScreen):
     """Modal screen showing help and keyboard shortcuts"""
     
     def compose(self) -> ComposeResult:
-        help_content = """
+        self.help_content = """
 # 🤖 RAG Chat Help
 
 ## Keyboard Shortcuts
@@ -158,7 +158,7 @@ class HelpScreen(ModalScreen):
     
     def on_mount(self):
         help_log = self.query_one("#help-content", RichLog)
-        help_log.write(help_content)
+        help_log.write(self.help_content)
 
 class DocumentBrowserScreen(ModalScreen):
     """Modal screen for browsing and managing documents"""
