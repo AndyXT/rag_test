@@ -1,39 +1,31 @@
+#!/usr/bin/env python3
+"""
+RAG Chat TUI Demo - Showcases the enhanced user interface
+This is a demonstration version that doesn't require LangChain dependencies.
+"""
+
 from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (
     Input, RichLog, Button, Static, Header, Footer, 
-    ProgressBar, Tabs, TabPane, Tree, Label, Switch,
-    SelectionList, DataTable, TabbedContent
+    ProgressBar, Tree, Label, Switch
 )
 from textual.binding import Binding
 from textual.reactive import reactive
-from textual.screen import ModalScreen, Screen
-from textual.timer import Timer
-from rich.console import Console
-from rich.text import Text
-from rich.table import Table
+from textual.screen import ModalScreen
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
 import asyncio
-import os
 import time
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Optional, Dict
-
-from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaLLM
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+from typing import List, Dict
+import os
 
 class ChatHistory:
     """Manages chat history with persistence"""
-    def __init__(self, history_file="chat_history.json"):
+    def __init__(self, history_file="demo_chat_history.json"):
         self.history_file = history_file
         self.sessions: List[Dict] = []
         self.current_session: List[Dict] = []
@@ -116,39 +108,39 @@ class HelpScreen(ModalScreen):
     
     def compose(self) -> ComposeResult:
         help_content = """
-# 🤖 RAG Chat Help
+# 🤖 RAG Chat Help - Demo Version
 
 ## Keyboard Shortcuts
 - **Ctrl+C**: Quit application
 - **Ctrl+L**: Clear current chat
-- **Ctrl+R**: Reload database
+- **Ctrl+R**: Reload database (demo)
 - **Ctrl+H**: Show this help
 - **Ctrl+S**: Open settings
 - **Ctrl+N**: New chat session
 - **F1**: Toggle sidebar
 - **Enter**: Send message
 
+## Demo Features
+This is a demonstration of the enhanced TUI interface.
+In the full version, you can:
+
+- 📚 Process PDF documents
+- 🔍 Perform semantic search
+- 💬 Chat with AI about your documents
+- ⚙️ Configure model parameters
+
 ## Getting Started
-1. **Load Database**: Click "Load DB" if you have an existing ChromaDB
-2. **Create Database**: Click "Create DB" to process PDFs from ./documents
-3. **Ask Questions**: Type your questions and press Enter
+1. This demo shows the interface improvements
+2. Type messages to see the chat formatting
+3. Try the keyboard shortcuts and buttons
+4. Explore the settings and help screens
 
-## Features
-- 📚 PDF document processing
-- 🔍 Semantic search with ChromaDB
-- 💬 Chat history with persistence
-- ⚙️ Configurable settings
-- 🎨 Multiple themes
-
-## Document Management
-- Place PDF files in the ./documents directory
-- Use "Create DB" to process new documents
-- Use "Reload DB" to refresh the database
-
-## Tips
-- Ask specific questions for better results
-- Use clear, complete sentences
-- Check the status bar for system information
+## Enhanced UI Features
+- ✨ Modern, colorful interface
+- 📊 Live status dashboard
+- 📈 Progress indicators
+- 🎨 Rich text formatting
+- ⌨️ Comprehensive keyboard shortcuts
         """
         
         with Container(id="help-container"):
@@ -192,135 +184,50 @@ class DocumentBrowserScreen(ModalScreen):
         if docs_path.exists():
             for file_path in docs_path.rglob("*.pdf"):
                 tree.root.add_leaf(str(file_path.relative_to(docs_path)))
+        else:
+            tree.root.add_leaf("No documents directory found")
+            tree.root.add_leaf("(This is a demo)")
 
-class RAGSystem:
-    def __init__(self, model_name="llama3.2", temperature=0, chunk_size=1000, chunk_overlap=200, retrieval_k=3):
-        self.vectorstore = None
-        self.qa_chain = None
-        self.model_name = model_name
-        self.temperature = temperature
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.retrieval_k = retrieval_k
-        
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
-        self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
-        
-    def update_settings(self, **kwargs):
-        """Update RAG system settings"""
-        for key, value in kwargs.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-        
-        # Recreate LLM with new settings
-        self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
-        
-        # Recreate QA chain if vectorstore exists
-        if self.vectorstore:
-            self._setup_qa_chain()
-        
-    def load_existing_db(self, db_path="./chroma_db"):
-        """Load existing ChromaDB"""
-        if os.path.exists(db_path):
-            self.vectorstore = Chroma(
-                persist_directory=db_path,
-                embedding_function=self.embeddings
-            )
-            self._setup_qa_chain()
-            return True
-        return False
+class MockRAGSystem:
+    """Mock RAG system for demonstration purposes"""
     
-    def create_db_from_docs(self, docs_path="./documents", db_path="./chroma_db", progress_callback=None):
-        """Create new ChromaDB from documents with progress tracking"""
-        loader = DirectoryLoader(docs_path, glob="**/*.pdf", loader_cls=PyPDFLoader)
+    def __init__(self):
+        self.is_loaded = False
+        self.model_name = "llama3.2"
+        self.doc_count = 0
         
-        if progress_callback:
-            progress_callback("Loading documents...")
-        
-        documents = loader.load()
-        
-        if not documents:
-            raise ValueError(f"No documents found in {docs_path}")
-        
-        if progress_callback:
-            progress_callback(f"Splitting {len(documents)} documents...")
-        
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap
-        )
-        texts = text_splitter.split_documents(documents)
-        
-        if progress_callback:
-            progress_callback(f"Creating embeddings for {len(texts)} chunks...")
-        
-        self.vectorstore = Chroma.from_documents(
-            documents=texts,
-            embedding=self.embeddings,
-            persist_directory=db_path
-        )
-        
-        if progress_callback:
-            progress_callback("Setting up QA chain...")
-        
-        self._setup_qa_chain()
-        
-        if progress_callback:
-            progress_callback("Database creation complete!")
-        
-    def _setup_qa_chain(self):
-        """Setup the QA chain using modern LangChain approach"""
-        system_prompt = (
-            "Use the following pieces of retrieved context to answer the question. "
-            "If you don't know the answer, just say that you don't know. "
-            "Use three sentences maximum and keep the answer concise.\n\n"
-            "{context}"
-        )
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", "{input}"),
-        ])
-        
-        question_answer_chain = create_stuff_documents_chain(self.llm, prompt)
-        
-        self.qa_chain = create_retrieval_chain(
-            self.vectorstore.as_retriever(search_kwargs={"k": self.retrieval_k}), 
-            question_answer_chain
-        )
-    
-    async def query(self, question):
-        """Query the RAG system"""
-        if not self.qa_chain:
-            return "RAG system not initialized. Load or create a database first."
-        
-        # Run in thread pool to avoid blocking UI
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self.qa_chain.invoke, {"input": question})
-        return result["answer"]
-    
     def get_stats(self):
-        """Get database statistics"""
-        if not self.vectorstore:
-            return None
-        
-        try:
-            collection = self.vectorstore._collection
-            count = collection.count()
+        """Get mock database statistics"""
+        if self.is_loaded:
             return {
-                "document_count": count,
+                "document_count": self.doc_count,
                 "model": self.model_name,
-                "temperature": self.temperature,
-                "chunk_size": self.chunk_size,
-                "retrieval_k": self.retrieval_k
+                "temperature": 0.0,
+                "chunk_size": 1000,
+                "retrieval_k": 3,
+                "status": "Ready"
             }
-        except:
-            return {"document_count": "Unknown"}
+        return None
+    
+    async def mock_query(self, question: str):
+        """Mock query processing with realistic delay"""
+        # Simulate processing time
+        await asyncio.sleep(1 + len(question) * 0.02)
+        
+        # Return a demo response
+        responses = [
+            "This is a demonstration of the enhanced TUI interface. In the real application, this would be an AI-generated response based on your documents.",
+            "The improved interface features rich formatting, progress indicators, and better user experience. Your question was processed in a simulated environment.",
+            "In the full version with LangChain integration, you would get intelligent responses based on your PDF documents using RAG (Retrieval-Augmented Generation).",
+            "This demo showcases the visual improvements: styled panels, timestamps, response times, and comprehensive keyboard shortcuts.",
+            "The enhanced TUI includes features like chat history, settings panel, document browser, and export functionality."
+        ]
+        
+        import random
+        return random.choice(responses)
 
 class RAGChatApp(App):
-    """Enhanced Textual app for RAG chat interface with improved UX."""
+    """Enhanced Textual app for RAG chat interface - Demo Version."""
     
     CSS = """
     /* Main layout */
@@ -435,14 +342,6 @@ class RAGChatApp(App):
     }
     
     /* Responsive adjustments */
-    .compact-sidebar {
-        width: 20%;
-    }
-    
-    .expanded-chat {
-        width: 80%;
-    }
-    
     .hidden-sidebar {
         width: 0%;
         display: none;
@@ -470,10 +369,9 @@ class RAGChatApp(App):
     
     def __init__(self):
         super().__init__()
-        self.rag = RAGSystem()
+        self.rag = MockRAGSystem()
         self.chat_history = ChatHistory()
-        self.current_progress = 0
-        self.progress_timer = None
+        self.message_count = 0
         
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -482,7 +380,7 @@ class RAGChatApp(App):
         with Container(classes="main-container"):
             # Sidebar
             with Vertical(classes="sidebar", id="sidebar"):
-                yield Static("🤖 RAG Assistant", classes="sidebar-title")
+                yield Static("🤖 RAG Assistant (Demo)", classes="sidebar-title")
                 
                 with Container(classes="stats-panel"):
                     yield Static("📊 Status", id="stats-title")
@@ -503,7 +401,7 @@ class RAGChatApp(App):
                     yield Static("Ready", id="progress-text")
                 
                 with Horizontal(classes="input-container"):
-                    yield Input(placeholder="Ask a question about your documents...", id="question_input")
+                    yield Input(placeholder="Try the demo! Ask any question...", id="question_input")
                     yield Button("📤 Send", classes="primary-btn", id="send_btn")
                 
                 with Horizontal(classes="status-container"):
@@ -545,11 +443,15 @@ class RAGChatApp(App):
         
         # Welcome message with rich formatting
         welcome_panel = Panel.fit(
-            "Welcome to RAG Chat! 🤖\n\n"
-            "• Load an existing database or create a new one\n"
-            "• Ask questions about your documents\n"
-            "• Use Ctrl+H for help and shortcuts",
-            title="🚀 Getting Started",
+            "Welcome to RAG Chat TUI Demo! 🤖✨\n\n"
+            "This demonstrates the enhanced user interface:\n"
+            "• Modern styling with rich colors and panels\n"
+            "• Responsive sidebar that can be toggled\n"
+            "• Progress indicators and status updates\n"
+            "• Comprehensive keyboard shortcuts\n"
+            "• Modal screens for settings and help\n\n"
+            "Try typing a message or pressing Ctrl+H for help!",
+            title="🚀 Demo Version",
             border_style="green"
         )
         chat.write(welcome_panel)
@@ -557,31 +459,24 @@ class RAGChatApp(App):
         # Update status
         self.update_stats()
         
-        # Try to load existing DB automatically
-        if self.rag.load_existing_db():
-            chat.write("[green]✓ Automatically loaded existing ChromaDB[/green]")
-            self.update_stats()
-        else:
-            chat.write("[yellow]💡 No existing database found. Create one from documents or load an existing one.[/yellow]")
+        # Show demo info
+        chat.write("[yellow]💡 This is a demonstration version. The full app integrates with LangChain for real document processing.[/yellow]")
     
     def update_stats(self):
         """Update the stats panel"""
         stats_content = self.query_one("#stats-content", RichLog)
         stats_content.clear()
         
-        stats = self.rag.get_stats()
-        if stats:
-            stats_table = Table(show_header=False, box=None, padding=0)
-            stats_table.add_column("Key", style="cyan")
-            stats_table.add_column("Value", style="white")
-            
-            for key, value in stats.items():
-                display_key = key.replace("_", " ").title()
-                stats_table.add_row(display_key, str(value))
-            
-            stats_content.write(stats_table)
-        else:
-            stats_content.write("[dim]No database loaded[/dim]")
+        stats_table = Table(show_header=False, box=None, padding=0)
+        stats_table.add_column("Key", style="cyan")
+        stats_table.add_column("Value", style="white")
+        
+        stats_table.add_row("Mode", "Demo")
+        stats_table.add_row("Messages", str(self.message_count))
+        stats_table.add_row("Status", "Ready")
+        stats_table.add_row("Sidebar", "Visible" if self.show_sidebar else "Hidden")
+        
+        stats_content.write(stats_table)
     
     def update_progress(self, message: str, progress: float = None):
         """Update progress display"""
@@ -608,10 +503,10 @@ class RAGChatApp(App):
             question_input.value = ""
             
         elif button_id == "load_btn":
-            await self._load_database()
+            await self._demo_load_database()
             
         elif button_id == "create_btn":
-            await self._create_database()
+            await self._demo_create_database()
             
         elif button_id == "docs_btn":
             self.push_screen(DocumentBrowserScreen())
@@ -622,59 +517,51 @@ class RAGChatApp(App):
         elif button_id == "help_btn":
             self.push_screen(HelpScreen())
     
-    async def _load_database(self):
-        """Load existing database with progress feedback"""
+    async def _demo_load_database(self):
+        """Demo database loading with progress feedback"""
         chat = self.query_one("#chat", RichLog)
         self.processing = True
         
-        self.update_progress("🔍 Searching for existing database...")
+        self.update_progress("🔍 Searching for existing database...", 20)
+        await asyncio.sleep(1)
         
-        # Simulate some loading time for better UX
-        await asyncio.sleep(0.5)
+        self.update_progress("📊 Loading database metadata...", 60)
+        await asyncio.sleep(0.8)
         
-        if self.rag.load_existing_db():
-            chat.write("[green]✅ Database loaded successfully![/green]")
-            self.update_stats()
-            self.update_progress("✅ Database ready", 100)
-        else:
-            chat.write("[red]❌ No database found at ./chroma_db[/red]")
-            self.update_progress("❌ No database found")
+        self.rag.is_loaded = True
+        self.rag.doc_count = 42  # Demo value
+        
+        chat.write("[green]✅ Demo database loaded successfully![/green]")
+        self.update_stats()
+        self.update_progress("✅ Database ready", 100)
         
         await asyncio.sleep(1)
         self.processing = False
     
-    async def _create_database(self):
-        """Create database with enhanced progress tracking"""
+    async def _demo_create_database(self):
+        """Demo database creation with enhanced progress tracking"""
         chat = self.query_one("#chat", RichLog)
         self.processing = True
         
         try:
             progress_steps = [
-                "📂 Scanning documents directory...",
-                "📄 Loading PDF documents...", 
-                "✂️ Splitting documents into chunks...",
-                "🧮 Creating embeddings...",
-                "💾 Building vector database...",
-                "🔗 Setting up QA chain...",
-                "✅ Database creation complete!"
+                ("📂 Scanning documents directory...", 15),
+                ("📄 Loading PDF documents...", 30), 
+                ("✂️ Splitting documents into chunks...", 50),
+                ("🧮 Creating embeddings...", 70),
+                ("💾 Building vector database...", 85),
+                ("🔗 Setting up QA chain...", 95),
+                ("✅ Database creation complete!", 100)
             ]
             
-            for i, step in enumerate(progress_steps[:-1]):
-                self.update_progress(step, (i / len(progress_steps)) * 100)
-                await asyncio.sleep(0.3)
+            for step, progress in progress_steps:
+                self.update_progress(step, progress)
+                await asyncio.sleep(0.8)
             
-            # Define progress callback
-            def progress_callback(message):
-                # This runs in the executor thread, so we need to be careful
-                pass
+            self.rag.is_loaded = True
+            self.rag.doc_count = 156  # Demo value
             
-            await asyncio.get_event_loop().run_in_executor(
-                None, 
-                lambda: self.rag.create_db_from_docs(progress_callback=progress_callback)
-            )
-            
-            self.update_progress(progress_steps[-1], 100)
-            chat.write("[green]✅ Database created successfully![/green]")
+            chat.write("[green]✅ Demo database created successfully![/green]")
             self.update_stats()
             
         except Exception as e:
@@ -701,26 +588,19 @@ class RAGChatApp(App):
         )
         chat.write(user_panel)
         
-        if not self.rag.qa_chain:
-            chat.write("[red]⚠️ Please load or create a database first.[/red]")
-            return
-        
         self.processing = True
-        self.update_progress("🤔 Thinking...", 50)
+        self.update_progress("🤔 Processing your question...", 50)
         
         # Add to history
         history_content = self.query_one("#history-content", RichLog)
-        history_content.write(f"[dim]{timestamp}[/dim] {question[:50]}...")
+        history_content.write(f"[dim]{timestamp}[/dim] {question[:40]}...")
         
         try:
-            # Show thinking indicator
-            thinking_msg = chat.write("[dim]🧠 Processing your question...[/dim]")
-            
             start_time = time.time()
-            answer = await self.rag.query(question)
+            answer = await self.rag.mock_query(question)
             response_time = time.time() - start_time
             
-            # Remove thinking indicator and add answer
+            # Add answer with response time
             assistant_panel = Panel(
                 answer,
                 title=f"🤖 Assistant [{response_time:.1f}s]",
@@ -731,6 +611,8 @@ class RAGChatApp(App):
             
             # Add to chat history
             self.chat_history.add_exchange(question, answer)
+            self.message_count += 1
+            self.update_stats()
             
             self.update_progress("✅ Response generated", 100)
             
@@ -761,11 +643,8 @@ class RAGChatApp(App):
     def action_reload_db(self) -> None:
         """Reload the database."""
         chat = self.query_one("#chat", RichLog)
-        if self.rag.load_existing_db():
-            chat.write("[green]🔄 Database reloaded successfully![/green]")
-            self.update_stats()
-        else:
-            chat.write("[red]❌ No database found to reload[/red]")
+        chat.write("[green]🔄 Demo database reloaded![/green]")
+        self.update_stats()
     
     def action_show_help(self) -> None:
         """Show help screen."""
@@ -782,6 +661,7 @@ class RAGChatApp(App):
     def action_toggle_sidebar(self) -> None:
         """Toggle sidebar visibility."""
         self.show_sidebar = not self.show_sidebar
+        self.update_stats()
     
     def action_new_session(self) -> None:
         """Start a new chat session."""
@@ -797,16 +677,16 @@ class RAGChatApp(App):
         """Export current chat session."""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"chat_export_{timestamp}.txt"
+            filename = f"demo_chat_export_{timestamp}.txt"
             
-            # This is a simplified export - in a real app you'd want more sophisticated export
             chat = self.query_one("#chat", RichLog)
             with open(filename, 'w') as f:
-                f.write("RAG Chat Export\n")
+                f.write("RAG Chat Demo Export\n")
                 f.write("=" * 50 + "\n")
-                f.write(f"Exported: {datetime.now().isoformat()}\n\n")
-                # Note: In a real implementation, you'd extract the actual chat content
-                f.write("Chat content would be exported here.\n")
+                f.write(f"Exported: {datetime.now().isoformat()}\n")
+                f.write(f"Message Count: {self.message_count}\n\n")
+                f.write("This is a demo export. In the full version,\n")
+                f.write("actual chat content would be exported here.\n")
             
             chat.write(f"[green]📁 Chat exported to {filename}[/green]")
         except Exception as e:
