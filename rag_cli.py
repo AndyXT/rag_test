@@ -15,9 +15,11 @@ from textual.binding import Binding
 
 # Optional clipboard support
 try:
-    import pyperclip  # For clipboard support  # type: ignore
+    import pyperclip  # For clipboard support
+    PYPERCLIP_AVAILABLE = True
 except ImportError:
-    pyperclip = None  # Fallback to file export  # type: ignore
+    pyperclip = None  # Fallback to file export
+    PYPERCLIP_AVAILABLE = False
 
 # Set environment variables for better cache management and to prevent conflicts
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Prevent tokenizer parallelism issues
@@ -854,7 +856,7 @@ class RAGSystem:
                     model_kwargs={
                         "device": "cpu",
                         "trust_remote_code": False,
-                        "cache_dir": os.environ["HF_HOME"],  # Explicit cache dir
+                        "cache_folder": os.environ["HF_HOME"],  # Explicit cache folder
                     },
                     encode_kwargs={
                         "normalize_embeddings": True,
@@ -1317,6 +1319,11 @@ Answer:"""
         except Exception as e:
             error_msg = str(e)
 
+            # Get current provider for provider-specific error messages
+            current_provider = "ollama"  # Default
+            if self.settings_manager:
+                current_provider = self.settings_manager.get("llm_provider", "ollama")
+
             # Provide specific guidance for common errors
             if "fds_to_keep" in error_msg or "Bad file descriptor" in error_msg:
                 return (
@@ -1325,12 +1332,51 @@ Answer:"""
                     "2. Reduce chunk size in settings (Ctrl+S)\n"
                     "3. Restart the application"
                 )
-            elif "connection" in error_msg.lower() or "ollama" in error_msg.lower():
+            elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
+                # Provider-specific connection error messages
+                if current_provider == "ollama":
+                    return (
+                        "Cannot connect to Ollama. You can:\n"
+                        "1. Start Ollama (run 'ollama serve' in terminal)\n"
+                        "2. Install the model (run 'ollama pull llama3.2')\n"
+                        "3. Or switch to an API provider in Settings (Ctrl+S)"
+                    )
+                elif current_provider == "openai":
+                    return (
+                        "Cannot connect to OpenAI API. Please check:\n"
+                        "1. Your API key is correct in Settings (Ctrl+S)\n"
+                        "2. Your internet connection is working\n"
+                        "3. The API endpoint URL is correct (if using custom endpoint)\n"
+                        "4. Or switch to Ollama in Settings (Ctrl+S)"
+                    )
+                elif current_provider == "anthropic":
+                    return (
+                        "Cannot connect to Anthropic API. Please check:\n"
+                        "1. Your API key is correct in Settings (Ctrl+S)\n"
+                        "2. Your internet connection is working\n"
+                        "3. Or switch to Ollama in Settings (Ctrl+S)"
+                    )
+                else:
+                    return (
+                        "Connection error. Please check your network connection and try again.\n"
+                        "You can also switch providers in Settings (Ctrl+S)"
+                    )
+            elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
+                if current_provider in ["openai", "anthropic"]:
+                    return (
+                        f"API authentication error for {current_provider.title()}. Please:\n"
+                        "1. Check your API key in Settings (Ctrl+S)\n"
+                        "2. Ensure your API key is valid and has sufficient credits\n"
+                        "3. Or switch to Ollama in Settings (Ctrl+S)"
+                    )
+                else:
+                    return f"Authentication error: {error_msg}"
+            elif "ollama" in error_msg.lower():
+                # Specific Ollama errors even when using other providers
                 return (
-                    "Cannot connect to Ollama. You can:\n"
-                    "1. Start Ollama (run 'ollama serve' in terminal)\n"
-                    "2. Install the model (run 'ollama pull llama3.2')\n"
-                    "3. Or switch to an API provider in Settings (Ctrl+S)"
+                    "Ollama-related error detected. You can:\n"
+                    "1. Switch to an API provider in Settings (Ctrl+S)\n"
+                    "2. Or fix Ollama: start service and install models"
                 )
             else:
                 return f"Error: {error_msg}"
@@ -1343,15 +1389,35 @@ Answer:"""
         try:
             collection = self.vectorstore._collection
             count = collection.count()
+            
+            # Get the correct model name based on the current provider
+            current_model = self._get_current_model_name()
+            
             return {
                 "document_count": count,
-                "model": self.model_name,
+                "model": current_model,
                 "temperature": self.temperature,
                 "chunk_size": self.chunk_size,
                 "retrieval_k": self.retrieval_k,
             }
         except Exception:
             return {"document_count": "Unknown"}
+
+    def _get_current_model_name(self):
+        """Get the current model name based on the active provider"""
+        if not self.settings_manager:
+            return self.model_name
+            
+        provider = self.settings_manager.get("llm_provider", "ollama")
+        
+        if provider == "ollama":
+            return self.settings_manager.get("ollama_model", "llama3.2:3b")
+        elif provider == "openai":
+            return self.settings_manager.get("openai_model", "gpt-3.5-turbo")
+        elif provider == "anthropic":
+            return self.settings_manager.get("anthropic_model", "claude-3-haiku-20240307")
+        else:
+            return self.model_name  # Fallback
 
     def _ensure_cache_directories(self):
         """Ensure all required cache directories exist and are writable"""
@@ -2055,7 +2121,7 @@ class RAGChatApp(App):
             message_text = f"[{last_message['timestamp']}] {last_message['type'].title()}: {last_message['content']}"
 
             # Try to use pyperclip, fall back to file export if not available
-            if pyperclip is not None:
+            if PYPERCLIP_AVAILABLE and pyperclip is not None:
                 try:
                     pyperclip.copy(message_text)
                     chat.write("[green]✅ Last message copied to clipboard![/green]")
@@ -2089,7 +2155,7 @@ class RAGChatApp(App):
                 f.write("RAG Chat Export\n")
                 f.write("=" * 50 + "\n")
                 f.write(f"Exported: {datetime.now().isoformat()}\n")
-                f.write(f"Model: {self.rag.model_name}\n")
+                f.write(f"Model: {self.rag._get_current_model_name()}\n")
                 f.write(f"Temperature: {self.rag.temperature}\n")
                 f.write("=" * 50 + "\n\n")
 
@@ -2118,7 +2184,7 @@ class RAGChatApp(App):
             export_data = {
                 "export_timestamp": datetime.now().isoformat(),
                 "model_settings": {
-                    "model": self.rag.model_name,
+                    "model": self.rag._get_current_model_name(),
                     "temperature": self.rag.temperature,
                     "chunk_size": self.rag.chunk_size,
                     "retrieval_k": self.rag.retrieval_k,

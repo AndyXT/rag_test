@@ -39,6 +39,9 @@ A sophisticated Text User Interface (TUI) for Retrieval-Augmented Generation (RA
    ```bash
    pip install -r requirements.txt
    ```
+   
+   **Note**: The requirements include compatible versions of all LangChain packages and their dependencies to avoid conflicts.
+   
 3. **Install Ollama** (if not already installed):
    ```bash
    # On Linux/macOS
