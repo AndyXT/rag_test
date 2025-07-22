@@ -1,0 +1,9 @@
+{
+  "model_name": "qwen3:30b-a3b",
+  "temperature": 0.0,
+  "chunk_size": 1000,
+  "chunk_overlap": 200,
+  "retrieval_k": 3,
+  "auto_save": true,
+  "dark_mode": false
+}

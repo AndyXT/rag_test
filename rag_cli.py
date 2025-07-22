@@ -408,11 +408,13 @@ class RAGSystem:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.retrieval_k = retrieval_k
-        self.llm = None
         self.embeddings = None
         self.vectorstore = None
         self.qa_chain = None
         self.conversation_history = []
+        
+        # Initialize LLM with Ollama
+        self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
         
         # Initialize embeddings with better error handling
         self._initialize_embeddings_safely()
