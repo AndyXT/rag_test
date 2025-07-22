@@ -81,6 +81,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaLLM
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
@@ -99,7 +101,12 @@ class SettingsManager:
             'chunk_overlap': 200,
             'retrieval_k': 3,
             'auto_save': True,
-            'dark_mode': False
+            'dark_mode': False,
+            'llm_provider': 'ollama',  # 'ollama', 'openai', 'anthropic'
+            'api_key': '',  # For API providers
+            'api_base_url': '',  # For custom API endpoints
+            'openai_model': 'gpt-3.5-turbo',  # For OpenAI
+            'anthropic_model': 'claude-3-haiku-20240307'  # For Anthropic
         }
         self.settings = self.load_settings()
     
@@ -200,15 +207,54 @@ class SettingsScreen(ModalScreen):
         self.query_one("#chunk-input", Input).value = str(settings.get('chunk_size', 1000))
         self.query_one("#overlap-input", Input).value = str(settings.get('chunk_overlap', 200))
         self.query_one("#retrieval-input", Input).value = str(settings.get('retrieval_k', 3))
+        
+        # Update LLM provider settings
+        provider_select = self.query_one("#provider-select", Select)
+        provider_select.value = settings.get('llm_provider', 'ollama')
+        
+        self.query_one("#api-key-input", Input).value = str(settings.get('api_key', ''))
+        self.query_one("#api-base-input", Input).value = str(settings.get('api_base_url', ''))
+        self.query_one("#openai-model-input", Input).value = str(settings.get('openai_model', 'gpt-3.5-turbo'))
+        self.query_one("#anthropic-model-input", Input).value = str(settings.get('anthropic_model', 'claude-3-haiku-20240307'))
+        
+        # Update provider-specific field visibility
+        self._update_provider_fields(settings.get('llm_provider', 'ollama'))
     
     def compose(self) -> ComposeResult:
         with Container(id="settings-container"):
             yield Static("⚙️ Settings", id="settings-title")
             
             with VerticalScroll():
-                yield Label("Model Settings:")
+                # LLM Provider Settings
+                yield Label("LLM Provider:")
+                yield Select([
+                    ("Ollama (Local)", "ollama"),
+                    ("OpenAI API", "openai"),
+                    ("Anthropic API", "anthropic")
+                ], value="ollama", id="provider-select")
+                
+                yield Static("")  # Spacer
+                
+                # Ollama-specific settings
+                yield Label("Ollama Model:", id="ollama-model-label")
                 yield Input(value="llama3.2", placeholder="Ollama model name", id="model-input")
                 
+                # API-specific settings (initially hidden)
+                yield Label("API Key:", id="api-key-label", classes="api-field")
+                yield Input(value="", placeholder="Your API key", password=True, id="api-key-input", classes="api-field")
+                
+                yield Label("API Base URL (optional):", id="api-base-label", classes="api-field")
+                yield Input(value="", placeholder="Custom API endpoint", id="api-base-input", classes="api-field")
+                
+                yield Label("OpenAI Model:", id="openai-model-label", classes="openai-field")
+                yield Input(value="gpt-3.5-turbo", placeholder="OpenAI model name", id="openai-model-input", classes="openai-field")
+                
+                yield Label("Anthropic Model:", id="anthropic-model-label", classes="anthropic-field")
+                yield Input(value="claude-3-haiku-20240307", placeholder="Anthropic model name", id="anthropic-model-input", classes="anthropic-field")
+                
+                yield Static("")  # Spacer
+                
+                # General settings
                 yield Label("Temperature (0.0-1.0):")
                 yield Input(value="0.0", placeholder="0.0", id="temp-input")
                 
@@ -235,26 +281,84 @@ class SettingsScreen(ModalScreen):
                     yield Button("Save", variant="primary", id="save-settings")
                     yield Button("Cancel", id="cancel-settings")
     
+    def _update_provider_fields(self, provider: str) -> None:
+        """Update visibility of provider-specific fields"""
+        # Hide all provider-specific fields first
+        for field_class in ["api-field", "openai-field", "anthropic-field"]:
+            try:
+                fields = self.query(f".{field_class}")
+                for field in fields:
+                    field.remove_class("visible")
+            except:
+                pass
+        
+        # Show Ollama fields
+        try:
+            self.query_one("#ollama-model-label").display = provider == "ollama"
+            self.query_one("#model-input").display = provider == "ollama"
+        except:
+            pass
+        
+        # Show API fields for non-Ollama providers
+        if provider in ["openai", "anthropic"]:
+            try:
+                api_fields = self.query(".api-field")
+                for field in api_fields:
+                    field.add_class("visible")
+            except:
+                pass
+        
+        # Show provider-specific model fields
+        if provider == "openai":
+            try:
+                openai_fields = self.query(".openai-field")
+                for field in openai_fields:
+                    field.add_class("visible")
+            except:
+                pass
+        elif provider == "anthropic":
+            try:
+                anthropic_fields = self.query(".anthropic-field")
+                for field in anthropic_fields:
+                    field.add_class("visible")
+            except:
+                pass
+    
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle provider selection change"""
+        if event.select.id == "provider-select":
+            self._update_provider_fields(event.value)
+    
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses in settings screen"""
         if event.button.id == "cancel-settings":
             self.dismiss()
         elif event.button.id == "save-settings":
             # Get all input values
+            provider_select = self.query_one("#provider-select", Select)
             model_input = self.query_one("#model-input", Input)
             temp_input = self.query_one("#temp-input", Input)
             chunk_input = self.query_one("#chunk-input", Input)
             overlap_input = self.query_one("#overlap-input", Input)
             retrieval_input = self.query_one("#retrieval-input", Input)
+            api_key_input = self.query_one("#api-key-input", Input)
+            api_base_input = self.query_one("#api-base-input", Input)
+            openai_model_input = self.query_one("#openai-model-input", Input)
+            anthropic_model_input = self.query_one("#anthropic-model-input", Input)
             
             # Validate and parse values
             try:
                 new_settings = {
+                    'llm_provider': provider_select.value or "ollama",
                     'model_name': model_input.value or "llama3.2",
                     'temperature': float(temp_input.value or "0.0"),
                     'chunk_size': int(chunk_input.value or "1000"),
                     'chunk_overlap': int(overlap_input.value or "200"),
-                    'retrieval_k': int(retrieval_input.value or "3")
+                    'retrieval_k': int(retrieval_input.value or "3"),
+                    'api_key': api_key_input.value or "",
+                    'api_base_url': api_base_input.value or "",
+                    'openai_model': openai_model_input.value or "gpt-3.5-turbo",
+                    'anthropic_model': anthropic_model_input.value or "claude-3-haiku-20240307"
                 }
                 
                 # Update the RAG system
@@ -425,12 +529,13 @@ class DocumentBrowserScreen(ModalScreen):
 class RAGSystem:
     """Enhanced RAG System with modern configuration and robust error handling"""
     
-    def __init__(self, model_name="llama3.2:3b", temperature=0.1, chunk_size=1000, chunk_overlap=200, retrieval_k=3):
+    def __init__(self, model_name="llama3.2:3b", temperature=0.1, chunk_size=1000, chunk_overlap=200, retrieval_k=3, settings_manager=None):
         self.model_name = model_name
         self.temperature = temperature
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.retrieval_k = retrieval_k
+        self.settings_manager = settings_manager
         self.embeddings = None
         self.vectorstore = None
         self.qa_chain = None
@@ -439,17 +544,8 @@ class RAGSystem:
         # Check and increase file descriptor limit before initialization
         self._check_and_increase_fd_limit()
         
-        # Initialize LLM with Ollama
-        try:
-            self.llm = OllamaLLM(
-                model=self.model_name, 
-                temperature=self.temperature,
-                num_ctx=2048,  # Reduce context window to save memory
-                num_thread=1   # Use single thread to avoid fd issues
-            )
-        except:
-            # Fallback to simpler initialization
-            self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
+        # Initialize LLM based on provider settings
+        self._initialize_llm()
         
         # Initialize embeddings with better error handling
         self._initialize_embeddings_safely()
@@ -475,6 +571,89 @@ class RAGSystem:
         except Exception:
             # Not critical if this fails
             pass
+    
+    def _initialize_llm(self):
+        """Initialize LLM based on provider settings"""
+        if not self.settings_manager:
+            # Fallback to Ollama if no settings manager
+            self._initialize_ollama()
+            return
+        
+        provider = self.settings_manager.get('llm_provider', 'ollama')
+        
+        try:
+            if provider == 'ollama':
+                self._initialize_ollama()
+            elif provider == 'openai':
+                self._initialize_openai()
+            elif provider == 'anthropic':
+                self._initialize_anthropic()
+            else:
+                print(f"[yellow]⚠ Unknown provider '{provider}', falling back to Ollama[/yellow]")
+                self._initialize_ollama()
+        except Exception as e:
+            print(f"[red]✗ Failed to initialize {provider}: {str(e)}[/red]")
+            if provider != 'ollama':
+                print("[yellow]⚠ Falling back to Ollama[/yellow]")
+                try:
+                    self._initialize_ollama()
+                except Exception as fallback_error:
+                    print(f"[red]✗ Ollama fallback also failed: {str(fallback_error)}[/red]")
+                    print("[red]Please ensure Ollama is installed and running, or configure an API provider[/red]")
+                    raise fallback_error
+            else:
+                raise e
+    
+    def _initialize_ollama(self):
+        """Initialize Ollama LLM"""
+        try:
+            self.llm = OllamaLLM(
+                model=self.model_name, 
+                temperature=self.temperature,
+                num_ctx=2048,  # Reduce context window to save memory
+                num_thread=1   # Use single thread to avoid fd issues
+            )
+            print(f"[green]✓ Initialized Ollama with model: {self.model_name}[/green]")
+        except Exception:
+            # Fallback to simpler initialization
+            self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
+            print(f"[green]✓ Initialized Ollama (simple mode) with model: {self.model_name}[/green]")
+    
+    def _initialize_openai(self):
+        """Initialize OpenAI LLM"""
+        api_key = self.settings_manager.get('api_key', '')
+        api_base = self.settings_manager.get('api_base_url', '')
+        model = self.settings_manager.get('openai_model', 'gpt-3.5-turbo')
+        
+        if not api_key:
+            raise ValueError("OpenAI API key is required but not provided in settings")
+        
+        kwargs = {
+            'model': model,
+            'temperature': self.temperature,
+            'api_key': api_key
+        }
+        
+        if api_base:
+            kwargs['base_url'] = api_base
+        
+        self.llm = ChatOpenAI(**kwargs)
+        print(f"[green]✓ Initialized OpenAI with model: {model}[/green]")
+    
+    def _initialize_anthropic(self):
+        """Initialize Anthropic LLM"""
+        api_key = self.settings_manager.get('api_key', '')
+        model = self.settings_manager.get('anthropic_model', 'claude-3-haiku-20240307')
+        
+        if not api_key:
+            raise ValueError("Anthropic API key is required but not provided in settings")
+        
+        self.llm = ChatAnthropic(
+            model=model,
+            temperature=self.temperature,
+            api_key=api_key
+        )
+        print(f"[green]✓ Initialized Anthropic with model: {model}[/green]")
     
     def _clean_hf_cache_locks(self):
         """Clean up Hugging Face cache lock files that may prevent model loading"""
@@ -574,16 +753,7 @@ class RAGSystem:
                 setattr(self, key, value)
         
         # Recreate LLM with new settings
-        try:
-            self.llm = OllamaLLM(
-                model=self.model_name, 
-                temperature=self.temperature,
-                num_ctx=2048,  # Reduce context window to save memory
-                num_thread=1   # Use single thread to avoid fd issues
-            )
-        except:
-            # Fallback to simpler initialization
-            self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
+        self._initialize_llm()
         
         # Recreate QA chain if vectorstore exists
         if self.vectorstore:
@@ -1004,9 +1174,10 @@ Answer:"""
                         "2. Reduce chunk size in settings (Ctrl+S)\n"
                         "3. Restart the application")
             elif "connection" in error_msg.lower() or "ollama" in error_msg.lower():
-                return ("Cannot connect to Ollama. Please ensure:\n"
-                        "1. Ollama is running (run 'ollama serve' in terminal)\n"
-                        "2. The model is installed (run 'ollama pull llama3.2')")
+                return ("Cannot connect to Ollama. You can:\n"
+                        "1. Start Ollama (run 'ollama serve' in terminal)\n"
+                        "2. Install the model (run 'ollama pull llama3.2')\n"
+                        "3. Or switch to an API provider in Settings (Ctrl+S)")
             else:
                 return f"Error: {error_msg}"
     
@@ -1206,6 +1377,25 @@ class RAGChatApp(App):
     .full-chat {
         width: 100%;
     }
+    
+    /* Provider-specific field styles */
+    .api-field {
+        display: none;
+    }
+    
+    .openai-field {
+        display: none;
+    }
+    
+    .anthropic-field {
+        display: none;
+    }
+    
+    .api-field.visible,
+    .openai-field.visible,
+    .anthropic-field.visible {
+        display: block;
+    }
     """
     
     BINDINGS = [
@@ -1235,7 +1425,8 @@ class RAGChatApp(App):
             temperature=self.settings_manager.get('temperature', 0.1),
             chunk_size=self.settings_manager.get('chunk_size', 1000),
             chunk_overlap=self.settings_manager.get('chunk_overlap', 200),
-            retrieval_k=self.settings_manager.get('retrieval_k', 3)
+            retrieval_k=self.settings_manager.get('retrieval_k', 3),
+            settings_manager=self.settings_manager
         )
         self.chat_history = ChatHistory()
         self.current_progress = 0
@@ -1642,7 +1833,8 @@ class RAGChatApp(App):
                 temperature=self.settings_manager.get('temperature', 0.1),
                 chunk_size=self.settings_manager.get('chunk_size', 1000),
                 chunk_overlap=self.settings_manager.get('chunk_overlap', 200),
-                retrieval_k=self.settings_manager.get('retrieval_k', 3)
+                retrieval_k=self.settings_manager.get('retrieval_k', 3),
+                settings_manager=self.settings_manager
             )
             
             # Try to reload the database
