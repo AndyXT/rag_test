@@ -1,27 +1,27 @@
-from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets import (
-    Input, RichLog, Button, Static, Header, Footer, 
-    ProgressBar, Tabs, TabPane, Tree, Label, Switch,
-    SelectionList, DataTable, TabbedContent
-)
-from textual.binding import Binding
-from textual.reactive import reactive
-from textual.screen import ModalScreen, Screen
-from textual.timer import Timer
-from rich.console import Console
-from rich.text import Text
-from rich.table import Table
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+# Standard library imports
 import asyncio
 import os
 import time
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
+# Third-party imports
+from textual.app import App, ComposeResult
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.widgets import (
+    Input, RichLog, Button, Static, Header, Footer, 
+    ProgressBar, Tree, Label, Switch
+)
+from textual.binding import Binding
+from textual.reactive import reactive
+from textual.screen import ModalScreen, Screen
+from rich.text import Text
+from rich.table import Table
+from rich.panel import Panel
+
+# LangChain imports
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -33,7 +33,10 @@ from langchain_core.prompts import ChatPromptTemplate
 
 class SettingsManager:
     """Manages application settings with persistence"""
-    def __init__(self, settings_file="settings.json"):
+    
+    DEFAULT_SETTINGS_FILE = "settings.json"
+    
+    def __init__(self, settings_file: str = DEFAULT_SETTINGS_FILE):
         self.settings_file = settings_file
         self.default_settings = {
             'model_name': 'llama3.2',
@@ -46,7 +49,7 @@ class SettingsManager:
         }
         self.settings = self.load_settings()
     
-    def load_settings(self) -> Dict:
+    def load_settings(self) -> Dict[str, Any]:
         """Load settings from file or return defaults"""
         try:
             if os.path.exists(self.settings_file):
@@ -54,11 +57,12 @@ class SettingsManager:
                     loaded = json.load(f)
                     # Merge with defaults to handle missing keys
                     return {**self.default_settings, **loaded}
-        except Exception:
+        except (IOError, json.JSONDecodeError, KeyError) as e:
+            print(f"Warning: Could not load settings from {self.settings_file}: {e}")
             pass
         return self.default_settings.copy()
     
-    def save_settings(self, settings: Dict) -> bool:
+    def save_settings(self, settings: Dict[str, Any]) -> bool:
         """Save settings to file"""
         try:
             # Merge with current settings
@@ -66,40 +70,45 @@ class SettingsManager:
             with open(self.settings_file, 'w') as f:
                 json.dump(self.settings, f, indent=2)
             return True
-        except Exception:
+        except (IOError, TypeError) as e:
+            print(f"Warning: Could not save settings to {self.settings_file}: {e}")
             return False
     
-    def get(self, key: str, default=None):
+    def get(self, key: str, default=None) -> Any:
         """Get a setting value"""
         return self.settings.get(key, default)
 
 class ChatHistory:
     """Manages chat history with persistence"""
-    def __init__(self, history_file="chat_history.json"):
+    
+    DEFAULT_HISTORY_FILE = "chat_history.json"
+    
+    def __init__(self, history_file: str = DEFAULT_HISTORY_FILE):
         self.history_file = history_file
-        self.sessions: List[Dict] = []
-        self.current_session: List[Dict] = []
+        self.sessions: List[Dict[str, Any]] = []
+        self.current_session: List[Dict[str, Any]] = []
         self.load_history()
     
-    def load_history(self):
+    def load_history(self) -> None:
         """Load chat history from file"""
         try:
             if os.path.exists(self.history_file):
                 with open(self.history_file, 'r') as f:
                     data = json.load(f)
                     self.sessions = data.get('sessions', [])
-        except Exception:
+        except (IOError, json.JSONDecodeError, KeyError) as e:
+            print(f"Warning: Could not load chat history from {self.history_file}: {e}")
             self.sessions = []
     
-    def save_history(self):
+    def save_history(self) -> None:
         """Save chat history to file"""
         try:
             with open(self.history_file, 'w') as f:
                 json.dump({'sessions': self.sessions}, f, indent=2)
-        except Exception:
-            pass
+        except (IOError, TypeError) as e:
+            print(f"Warning: Could not save chat history to {self.history_file}: {e}")
     
-    def add_exchange(self, question: str, answer: str):
+    def add_exchange(self, question: str, answer: str) -> None:
         """Add Q&A exchange to current session"""
         self.current_session.append({
             'timestamp': datetime.now().isoformat(),
@@ -107,7 +116,7 @@ class ChatHistory:
             'answer': answer
         })
     
-    def start_new_session(self):
+    def start_new_session(self) -> None:
         """Start a new chat session"""
         if self.current_session:
             session_data = {
@@ -349,7 +358,8 @@ class DocumentBrowserScreen(ModalScreen):
         self.app.exit()
 
 class RAGSystem:
-    def __init__(self, model_name="llama3.2", temperature=0, chunk_size=1000, chunk_overlap=200, retrieval_k=3):
+    def __init__(self, model_name: str = "llama3.2", temperature: float = 0, 
+                 chunk_size: int = 1000, chunk_overlap: int = 200, retrieval_k: int = 3):
         self.vectorstore = None
         self.qa_chain = None
         self.model_name = model_name
@@ -906,7 +916,7 @@ class RAGChatApp(App):
         )
         self.chat_history = ChatHistory()
         self.current_progress = 0
-        self.progress_timer = None
+        self.progress_timer: Optional[Any] = None
         
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
