@@ -662,16 +662,29 @@ class RAGSystem:
         import shutil
         import time
         from pathlib import Path
+        import tempfile
 
         # Set comprehensive environment variables for ChromaDB
         os.environ['ANONYMIZED_TELEMETRY'] = 'False'
         os.environ['CHROMA_SERVER_NOFILE'] = '65536'  # Increase file descriptor limit for ChromaDB
 
+        final_path = Path(db_path)
+        backup_path = None
+        temp_path = None
+
         try:
-            # Remove existing database if it exists
-            final_path = Path(db_path)
+            # Clean up old backups first
+            self._cleanup_old_backups(db_path)
+            
+            # Create backup of existing database if it exists
             if final_path.exists():
-                shutil.rmtree(final_path)
+                backup_path = Path(str(final_path) + f"_backup_{int(time.time())}")
+                print(f"[blue]ℹ Backing up existing database to {backup_path}[/blue]")
+                shutil.move(str(final_path), str(backup_path))
+
+            # Create temporary directory for new database
+            temp_dir = tempfile.mkdtemp(prefix="chroma_temp_")
+            temp_path = Path(temp_dir)
 
             # Create ChromaDB with modern configuration
             # Use smaller batches and add delays to avoid file descriptor exhaustion
@@ -687,11 +700,11 @@ class RAGSystem:
 
                 try:
                     if vectorstore is None:
-                        # Create initial vectorstore with explicit settings
+                        # Create initial vectorstore with explicit settings in temp directory
                         vectorstore = Chroma.from_documents(
                             documents=batch,
                             embedding=self.embeddings,
-                            persist_directory=db_path,
+                            persist_directory=str(temp_path),
                             collection_metadata={"hnsw:space": "cosine"}
                         )
                     else:
@@ -732,19 +745,80 @@ class RAGSystem:
             if vectorstore is None:
                 raise Exception("Failed to create any vectorstore - all batches failed. This may be due to embedding model issues or document processing problems.")
 
+            # If we get here, database creation was successful
+            # Verify the temporary database is valid before moving
+            if temp_path and temp_path.exists():
+                # Quick validation - check if essential files exist
+                essential_files = ["chroma.sqlite3"]
+                temp_db_valid = all((temp_path / f).exists() for f in essential_files)
+                
+                if temp_db_valid:
+                    shutil.move(str(temp_path), str(final_path))
+                    print(f"[green]✓ Database successfully created at {final_path}[/green]")
+                    
+                    # Remove backup if creation was successful
+                    if backup_path and backup_path.exists():
+                        try:
+                            shutil.rmtree(str(backup_path))
+                            print(f"[green]✓ Removed backup database[/green]")
+                        except Exception:
+                            print(f"[yellow]⚠ Could not remove backup at {backup_path}[/yellow]")
+                else:
+                    raise Exception("Created database appears to be incomplete or corrupted")
+
             # Final garbage collection
             gc.collect()
             return vectorstore
 
         except Exception as e:
-            # Clean up on failure
-            if final_path.exists():
+            # Clean up temporary directory on failure
+            if temp_path and temp_path.exists():
                 try:
-                    shutil.rmtree(final_path)
+                    shutil.rmtree(str(temp_path))
+                    print(f"[blue]ℹ Cleaned up temporary database[/blue]")
                 except Exception:
                     pass
+            
+            # Restore backup if it exists
+            if backup_path and backup_path.exists():
+                try:
+                    shutil.move(str(backup_path), str(final_path))
+                    print(f"[green]✓ Restored backup database[/green]")
+                except Exception as restore_error:
+                    print(f"[red]✗ Failed to restore backup: {restore_error}[/red]")
+            
             gc.collect()
             raise Exception(f"ChromaDB creation failed: {str(e)}") from e
+
+    def _cleanup_old_backups(self, db_path, max_backups=3):
+        """Clean up old backup directories to prevent disk space issues"""
+        try:
+            base_path = Path(db_path)
+            parent_dir = base_path.parent
+            backup_pattern = f"{base_path.name}_backup_*"
+            
+            # Find all backup directories
+            backup_dirs = []
+            for item in parent_dir.glob(backup_pattern):
+                if item.is_dir():
+                    try:
+                        # Extract timestamp from backup name
+                        timestamp = int(item.name.split('_backup_')[1])
+                        backup_dirs.append((timestamp, item))
+                    except (ValueError, IndexError):
+                        continue
+            
+            # Sort by timestamp (newest first) and remove old backups
+            backup_dirs.sort(reverse=True)
+            for _, backup_dir in backup_dirs[max_backups:]:
+                try:
+                    shutil.rmtree(str(backup_dir))
+                    print(f"[blue]ℹ Removed old backup: {backup_dir.name}[/blue]")
+                except Exception as e:
+                    print(f"[yellow]⚠ Could not remove old backup {backup_dir}: {e}[/yellow]")
+                    
+        except Exception as e:
+            print(f"[yellow]⚠ Error during backup cleanup: {e}[/yellow]")
 
     def _setup_qa_chain(self):
         """Setup the QA chain using modern LangChain approach"""
