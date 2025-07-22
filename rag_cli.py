@@ -1,9 +1,51 @@
+# RAG CLI Application with Modern Interface and Robust Error Handling
+import os
+import sys
+import gc
+import time
+import shutil
+import hashlib
+import multiprocessing as mp
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Tuple
+from rich import print as rprint
+from rich.console import Console
+from rich.prompt import Prompt, Confirm
+from rich.progress import Progress, TaskID
+from rich.table import Table
+from rich.panel import Panel
+from rich.layout import Layout
+from rich.live import Live
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.containers import Container, Horizontal, Vertical
+from textual.widgets import Button, Static, TextArea, Input, Select, Checkbox, ProgressBar
+from textual.binding import Binding
+from textual import work
+import warnings
+
+# Set environment variables for better cache management and to prevent conflicts
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # Prevent tokenizer parallelism issues
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'  # Reduce verbosity
+os.environ['HF_DATASETS_OFFLINE'] = '0'  # Allow online access
+os.environ['TRANSFORMERS_OFFLINE'] = '0'  # Allow online access
+os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'  # Disable symlink warnings
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'  # Disable advisory warnings
+
+# Set cache directories with better control
+os.environ['HF_HOME'] = os.path.expanduser('~/.cache/huggingface')
+os.environ['TRANSFORMERS_CACHE'] = os.path.expanduser('~/.cache/huggingface/transformers')
+os.environ['HF_DATASETS_CACHE'] = os.path.expanduser('~/.cache/huggingface/datasets')
+
+# Ensure cache directories exist
+for cache_dir in [os.environ['HF_HOME'], os.environ['TRANSFORMERS_CACHE'], os.environ['HF_DATASETS_CACHE']]:
+    os.makedirs(cache_dir, exist_ok=True)
+
+from langchain_huggingface import HuggingFaceEmbeddings
+
 # Standard library imports
 import asyncio
-import os
-import time
 import json
-from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
@@ -358,65 +400,57 @@ class DocumentBrowserScreen(ModalScreen):
         self.app.exit()
 
 class RAGSystem:
-    def __init__(self, model_name: str = "llama3.2", temperature: float = 0, 
-                 chunk_size: int = 1000, chunk_overlap: int = 200, retrieval_k: int = 3):
-        self.vectorstore = None
-        self.qa_chain = None
+    """Enhanced RAG System with modern configuration and robust error handling"""
+    
+    def __init__(self, model_name="llama3.2:3b", temperature=0.1):
         self.model_name = model_name
         self.temperature = temperature
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.retrieval_k = retrieval_k
-
-        # Check and optimize system resources
-        self._check_system_resources()
-
-        # Initialize embeddings with better error handling and subprocess control
-        self._init_embeddings()
-        self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
-
-    def _check_system_resources(self):
-        """Check and optimize system resources for file descriptor handling"""
-        import resource
-        import os
-
+        self.llm = None
+        self.embeddings = None
+        self.vectorstore = None
+        self.qa_chain = None
+        self.conversation_history = []
+        
+        # Initialize embeddings with better error handling
+        self._initialize_embeddings_safely()
+    
+    def _clean_hf_cache_locks(self):
+        """Clean up Hugging Face cache lock files that may prevent model loading"""
+        cache_dir = Path(os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface')))
+        
+        if not cache_dir.exists():
+            return
+        
+        lock_patterns = ['*.lock', '*.tmp*', '*incomplete*']
+        cleaned_files = []
+        
         try:
-            # Get current file descriptor limits
-            soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
-
-            # If soft limit is too low, try to increase it
-            if soft_limit < 4096:
-                try:
-                    # Try to set soft limit to 4096 or hard limit, whichever is smaller
-                    new_soft_limit = min(4096, hard_limit)
-                    resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft_limit, hard_limit))
-                    print(f"Increased file descriptor limit from {soft_limit} to {new_soft_limit}")
-                except (ValueError, OSError):
-                    print(f"Warning: Could not increase file descriptor limit (current: {soft_limit})")
-
-            # Set additional environment variables for stability
-            os.environ['PYTHONDONTWRITEBYTECODE'] = '1'  # Reduce file I/O
-            os.environ['PYTHONIOENCODING'] = 'utf-8'     # Consistent encoding
-
+            for pattern in lock_patterns:
+                for lock_file in cache_dir.rglob(pattern):
+                    try:
+                        if lock_file.is_file():
+                            # Check if lock file is stale (older than 30 minutes)
+                            if time.time() - lock_file.stat().st_mtime > 1800:
+                                lock_file.unlink()
+                                cleaned_files.append(str(lock_file))
+                    except (OSError, PermissionError):
+                        continue
+            
+            if cleaned_files:
+                print(f"[green]✓ Cleaned {len(cleaned_files)} stale cache lock files[/green]")
+                
         except Exception as e:
-            print(f"Warning: Could not check system resources: {e}")
-
-    def _init_embeddings(self):
-        """Initialize embeddings with robust error handling and file descriptor management"""
-        import os
-        import gc
-        import multiprocessing as mp
-
-        # Set comprehensive environment variables to prevent subprocess issues
-        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-        os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-        os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
-        os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
-        os.environ['OMP_NUM_THREADS'] = '1'
-        os.environ['MKL_NUM_THREADS'] = '1'
-        os.environ['NUMEXPR_NUM_THREADS'] = '1'
-
-        # Force single process to avoid file descriptor issues
+            print(f"[yellow]⚠ Could not clean cache locks: {str(e)}[/yellow]")
+    
+    def _initialize_embeddings_safely(self):
+        """Initialize embeddings with robust error handling and cache management"""
+        # Ensure cache directories are properly set up
+        self._ensure_cache_directories()
+        
+        # Clean any stale lock files first
+        self._clean_hf_cache_locks()
+        
+        # Force single-threaded multiprocessing to avoid conflicts
         mp.set_start_method('spawn', force=True)
 
         try:
@@ -441,9 +475,35 @@ class RAGSystem:
             gc.collect()
 
         except Exception as e:
-            # Force cleanup on failure
-            gc.collect()
-            raise Exception(f"Failed to initialize embeddings: {str(e)}") from e
+            # If initialization fails, try cache cleanup and retry once
+            print(f"[yellow]⚠ Initial embedding initialization failed: {str(e)}[/yellow]")
+            print("[blue]ℹ Attempting cache cleanup and retry...[/blue]")
+            
+            self._clean_hf_cache_locks()
+            
+            # Wait a moment for file system to catch up
+            time.sleep(2)
+            
+            try:
+                # Retry with additional safety measures
+                self.embeddings = HuggingFaceEmbeddings(
+                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                    model_kwargs={
+                        'device': 'cpu',
+                        'trust_remote_code': False,
+                        'cache_dir': os.environ['TRANSFORMERS_CACHE']  # Explicit cache dir
+                    },
+                    encode_kwargs={
+                        'normalize_embeddings': True,
+                        'batch_size': 1,
+                        'convert_to_numpy': True
+                    }
+                )
+                print("[green]✓ Embedding initialization successful after cache cleanup[/green]")
+                
+            except Exception as retry_error:
+                print(f"[red]✗ Failed to initialize embeddings after retry: {str(retry_error)}[/red]")
+                raise Exception(f"Failed to initialize embeddings: {str(retry_error)}") from retry_error
         
     def update_settings(self, **kwargs):
         """Update RAG system settings"""
@@ -734,6 +794,34 @@ class RAGSystem:
             }
         except Exception:
             return {"document_count": "Unknown"}
+
+    def _ensure_cache_directories(self):
+        """Ensure all required cache directories exist and are writable"""
+        cache_dirs = [
+            os.environ['HF_HOME'],
+            os.environ['TRANSFORMERS_CACHE'],
+            os.environ['HF_DATASETS_CACHE'],
+            os.path.join(os.environ['HF_HOME'], 'hub'),
+            os.path.join(os.environ['HF_HOME'], 'transformers'),
+        ]
+        
+        for cache_dir in cache_dirs:
+            try:
+                cache_path = Path(cache_dir)
+                cache_path.mkdir(parents=True, exist_ok=True)
+                
+                # Test if directory is writable
+                test_file = cache_path / '.write_test'
+                test_file.touch()
+                test_file.unlink()
+                
+            except (OSError, PermissionError) as e:
+                print(f"[yellow]⚠ Cache directory issue: {cache_dir} - {str(e)}[/yellow]")
+                # Try to create an alternative cache location
+                alt_cache = Path.home() / '.local' / 'share' / 'huggingface'
+                alt_cache.mkdir(parents=True, exist_ok=True)
+                os.environ['HF_HOME'] = str(alt_cache)
+                break
 
 class RAGChatApp(App):
     """Enhanced Textual app for RAG chat interface with improved UX."""

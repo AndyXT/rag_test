@@ -118,8 +118,27 @@ from langchain_ollama import OllamaLLM
 
 ### Embedding Model Errors
 If you encounter errors during ChromaDB database creation related to embeddings:
+
+**🚀 New Improved Solutions (No cache deletion needed!):**
+
+1. **Use the built-in cache cleanup**: The system now automatically cleans stale lock files during initialization
+2. **Run the cache manager utility**: `python hf_cache_manager.py --clean-locks --validate`
+3. **Manual lock cleanup only**: `find ~/.cache/huggingface -name "*.lock" -mmin +30 -delete`
+4. **Check cache permissions**: `python hf_cache_manager.py --fix-permissions`
+
+**💡 What causes the issue:**
+- Stale lock files from interrupted model downloads
+- Multiple processes accessing the same model cache simultaneously
+- Corrupted partial downloads in cache
+- File permission issues in cache directory
+
+**🛡️ Prevention (automatically handled now):**
+- Environment variables set to prevent tokenizer conflicts
+- Automatic cleanup of stale lock files on startup
+- Better cache directory management and validation
+- Single-threaded embedding initialization
+
+**⚠️ Legacy Solution (Only if above solutions don't work):**
 1. Clear the HuggingFace cache: `rm -rf ~/.cache/huggingface/`
 2. Increase file descriptor limit: `ulimit -n 4096`
 3. Set environment variable: `export TOKENIZERS_PARALLELISM=false`
-
-The embedding cache can become corrupted during interrupted downloads or version conflicts.
