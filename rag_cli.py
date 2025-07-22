@@ -22,7 +22,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
 
-from langchain_community.document_loaders import DirectoryLoader, PyPDFLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
@@ -30,6 +30,48 @@ from langchain_ollama import OllamaLLM
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+
+class SettingsManager:
+    """Manages application settings with persistence"""
+    def __init__(self, settings_file="settings.json"):
+        self.settings_file = settings_file
+        self.default_settings = {
+            'model_name': 'llama3.2',
+            'temperature': 0.0,
+            'chunk_size': 1000,
+            'chunk_overlap': 200,
+            'retrieval_k': 3,
+            'auto_save': True,
+            'dark_mode': False
+        }
+        self.settings = self.load_settings()
+    
+    def load_settings(self) -> Dict:
+        """Load settings from file or return defaults"""
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r') as f:
+                    loaded = json.load(f)
+                    # Merge with defaults to handle missing keys
+                    return {**self.default_settings, **loaded}
+        except Exception:
+            pass
+        return self.default_settings.copy()
+    
+    def save_settings(self, settings: Dict) -> bool:
+        """Save settings to file"""
+        try:
+            # Merge with current settings
+            self.settings.update(settings)
+            with open(self.settings_file, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+            return True
+        except Exception:
+            return False
+    
+    def get(self, key: str, default=None):
+        """Get a setting value"""
+        return self.settings.get(key, default)
 
 class ChatHistory:
     """Manages chat history with persistence"""
@@ -79,11 +121,28 @@ class ChatHistory:
 class SettingsScreen(ModalScreen):
     """Modal screen for application settings"""
     
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("ctrl+c", "quit", "Quit"),
+    ]
+    
+    def on_mount(self) -> None:
+        """Load current settings when screen is mounted"""
+        # Get settings from the settings manager (which reflects current RAG state)
+        settings = self.app.settings_manager.settings
+        
+        # Update input fields with current values
+        self.query_one("#model-input", Input).value = str(settings.get('model_name', 'llama3.2'))
+        self.query_one("#temp-input", Input).value = str(settings.get('temperature', 0.0))
+        self.query_one("#chunk-input", Input).value = str(settings.get('chunk_size', 1000))
+        self.query_one("#overlap-input", Input).value = str(settings.get('chunk_overlap', 200))
+        self.query_one("#retrieval-input", Input).value = str(settings.get('retrieval_k', 3))
+    
     def compose(self) -> ComposeResult:
         with Container(id="settings-container"):
             yield Static("⚙️ Settings", id="settings-title")
             
-            with Vertical():
+            with VerticalScroll():
                 yield Label("Model Settings:")
                 yield Input(value="llama3.2", placeholder="Ollama model name", id="model-input")
                 
@@ -107,12 +166,75 @@ class SettingsScreen(ModalScreen):
                     yield Switch(value=False, id="dark-mode-switch")
                     yield Label("Dark mode")
                 
-                with Horizontal():
+                yield Static("")  # Spacer
+                
+                with Horizontal(classes="button-row"):
                     yield Button("Save", variant="primary", id="save-settings")
                     yield Button("Cancel", id="cancel-settings")
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in settings screen"""
+        if event.button.id == "cancel-settings":
+            self.dismiss()
+        elif event.button.id == "save-settings":
+            # Get all input values
+            model_input = self.query_one("#model-input", Input)
+            temp_input = self.query_one("#temp-input", Input)
+            chunk_input = self.query_one("#chunk-input", Input)
+            overlap_input = self.query_one("#overlap-input", Input)
+            retrieval_input = self.query_one("#retrieval-input", Input)
+            
+            # Validate and parse values
+            try:
+                new_settings = {
+                    'model_name': model_input.value or "llama3.2",
+                    'temperature': float(temp_input.value or "0.0"),
+                    'chunk_size': int(chunk_input.value or "1000"),
+                    'chunk_overlap': int(overlap_input.value or "200"),
+                    'retrieval_k': int(retrieval_input.value or "3")
+                }
+                
+                # Update the RAG system
+                self.app.rag.update_settings(**new_settings)
+                
+                # Save settings to file
+                if self.app.settings_manager.save_settings(new_settings):
+                    # Update the stats display
+                    self.app.update_stats()
+                    
+                    # Show success notification
+                    self.app.notify("Settings saved successfully!")
+                else:
+                    self.app.notify("Settings applied but could not save to file", severity="warning")
+                    
+                self.dismiss()
+                
+            except ValueError as e:
+                self.app.notify(f"Invalid settings: {str(e)}", severity="error")
+            except Exception as e:
+                self.app.notify(f"Error saving settings: {str(e)}", severity="error")
+    
+    def action_dismiss(self) -> None:
+        """Handle escape key to close modal"""
+        self.dismiss()
+
+    def on_key(self, event) -> None:
+        """Handle key events, specifically escape key to close modal"""
+        if event.key == "escape":
+            self.dismiss()
+            event.prevent_default()
+
+    def action_quit(self) -> None:
+        """Quit the application from settings screen."""
+        self.app.exit()
 
 class HelpScreen(ModalScreen):
     """Modal screen showing help and keyboard shortcuts"""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("ctrl+c", "quit", "Quit"),
+    ]
 
     help_content = """
 # 🤖 RAG Chat Help
@@ -159,9 +281,27 @@ class HelpScreen(ModalScreen):
     def on_mount(self):
         help_log = self.query_one("#help-content", RichLog)
         help_log.write(self.help_content)
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in the help screen"""
+        if event.button.id == "close-help":
+            self.dismiss()
+    
+    def action_dismiss(self) -> None:
+        """Handle escape key to close modal"""
+        self.dismiss()
+
+    def action_quit(self) -> None:
+        """Quit the application from help screen."""
+        self.app.exit()
 
 class DocumentBrowserScreen(ModalScreen):
     """Modal screen for browsing and managing documents"""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+        Binding("ctrl+c", "quit", "Quit"),
+    ]
     
     def compose(self) -> ComposeResult:
         with Container(id="doc-browser-container"):
@@ -192,6 +332,21 @@ class DocumentBrowserScreen(ModalScreen):
         if docs_path.exists():
             for file_path in docs_path.rglob("*.pdf"):
                 tree.root.add_leaf(str(file_path.relative_to(docs_path)))
+    
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in document browser"""
+        if event.button.id == "close-docs":
+            self.dismiss()
+        elif event.button.id == "refresh-docs":
+            self.refresh_documents()
+    
+    def action_dismiss(self) -> None:
+        """Handle escape key to close modal"""
+        self.dismiss()
+
+    def action_quit(self) -> None:
+        """Quit the application from document browser."""
+        self.app.exit()
 
 class RAGSystem:
     def __init__(self, model_name="llama3.2", temperature=0, chunk_size=1000, chunk_overlap=200, retrieval_k=3):
@@ -202,11 +357,83 @@ class RAGSystem:
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.retrieval_k = retrieval_k
-        
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+
+        # Check and optimize system resources
+        self._check_system_resources()
+
+        # Initialize embeddings with better error handling and subprocess control
+        self._init_embeddings()
         self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
+
+    def _check_system_resources(self):
+        """Check and optimize system resources for file descriptor handling"""
+        import resource
+        import os
+
+        try:
+            # Get current file descriptor limits
+            soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+            # If soft limit is too low, try to increase it
+            if soft_limit < 4096:
+                try:
+                    # Try to set soft limit to 4096 or hard limit, whichever is smaller
+                    new_soft_limit = min(4096, hard_limit)
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft_limit, hard_limit))
+                    print(f"Increased file descriptor limit from {soft_limit} to {new_soft_limit}")
+                except (ValueError, OSError):
+                    print(f"Warning: Could not increase file descriptor limit (current: {soft_limit})")
+
+            # Set additional environment variables for stability
+            os.environ['PYTHONDONTWRITEBYTECODE'] = '1'  # Reduce file I/O
+            os.environ['PYTHONIOENCODING'] = 'utf-8'     # Consistent encoding
+
+        except Exception as e:
+            print(f"Warning: Could not check system resources: {e}")
+
+    def _init_embeddings(self):
+        """Initialize embeddings with robust error handling and file descriptor management"""
+        import os
+        import gc
+        import multiprocessing as mp
+
+        # Set comprehensive environment variables to prevent subprocess issues
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+        os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+        os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+        os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+        os.environ['OMP_NUM_THREADS'] = '1'
+        os.environ['MKL_NUM_THREADS'] = '1'
+        os.environ['NUMEXPR_NUM_THREADS'] = '1'
+
+        # Force single process to avoid file descriptor issues
+        mp.set_start_method('spawn', force=True)
+
+        try:
+            # Force garbage collection before initialization
+            gc.collect()
+
+            # Force single-threaded operation to avoid file descriptor issues
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={
+                    'device': 'cpu',
+                    'trust_remote_code': False
+                },
+                encode_kwargs={
+                    'normalize_embeddings': True,
+                    'batch_size': 1,  # Process one at a time to avoid memory/fd issues
+                    'convert_to_numpy': True
+                }
+            )
+
+            # Force garbage collection after initialization
+            gc.collect()
+
+        except Exception as e:
+            # Force cleanup on failure
+            gc.collect()
+            raise Exception(f"Failed to initialize embeddings: {str(e)}") from e
         
     def update_settings(self, **kwargs):
         """Update RAG system settings"""
@@ -222,54 +449,233 @@ class RAGSystem:
             self._setup_qa_chain()
         
     def load_existing_db(self, db_path="./chroma_db"):
-        """Load existing ChromaDB"""
+        """Load existing ChromaDB with modern configuration"""
+        import os
+
+        # Set environment variables for ChromaDB (modern approach)
+        os.environ['ANONYMIZED_TELEMETRY'] = 'False'
+
         if os.path.exists(db_path):
-            self.vectorstore = Chroma(
-                persist_directory=db_path,
-                embedding_function=self.embeddings
-            )
-            self._setup_qa_chain()
-            return True
+            try:
+                # Use modern ChromaDB configuration
+                self.vectorstore = Chroma(
+                    persist_directory=db_path,
+                    embedding_function=self.embeddings
+                )
+                self._setup_qa_chain()
+                return True
+            except Exception:
+                # If loading fails, return False to indicate no database
+                return False
         return False
     
     def create_db_from_docs(self, docs_path="./documents", db_path="./chroma_db", progress_callback=None):
-        """Create new ChromaDB from documents with progress tracking"""
-        loader = DirectoryLoader(docs_path, glob="**/*.pdf", loader_cls=PyPDFLoader)
-        
-        if progress_callback:
-            progress_callback("Loading documents...")
-        
-        documents = loader.load()
-        
-        if not documents:
-            raise ValueError(f"No documents found in {docs_path}")
-        
-        if progress_callback:
-            progress_callback(f"Splitting {len(documents)} documents...")
-        
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap
-        )
-        texts = text_splitter.split_documents(documents)
-        
-        if progress_callback:
-            progress_callback(f"Creating embeddings for {len(texts)} chunks...")
-        
-        self.vectorstore = Chroma.from_documents(
-            documents=texts,
-            embedding=self.embeddings,
-            persist_directory=db_path
-        )
-        
-        if progress_callback:
-            progress_callback("Setting up QA chain...")
-        
-        self._setup_qa_chain()
-        
-        if progress_callback:
-            progress_callback("Database creation complete!")
-        
+        """Create new ChromaDB from documents with robust error handling and file descriptor management"""
+        import os
+        import gc
+        from pathlib import Path
+        from contextlib import contextmanager
+
+        @contextmanager
+        def pdf_loader_context(pdf_path):
+            """Context manager for PDF loading with proper cleanup"""
+            loader = None
+            try:
+                loader = PyPDFLoader(str(pdf_path))
+                yield loader
+            finally:
+                # Explicit cleanup
+                if hasattr(loader, 'close'):
+                    loader.close()
+                del loader
+                gc.collect()
+
+        # Set comprehensive environment variables to help with subprocess issues
+        os.environ['PYTHONUNBUFFERED'] = '1'
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+        os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+        os.environ['OMP_NUM_THREADS'] = '1'
+
+        try:
+            docs_path = Path(docs_path)
+            pdf_files = list(docs_path.glob("**/*.pdf"))
+
+            if not pdf_files:
+                raise ValueError(f"No PDF files found in {docs_path}")
+
+            if progress_callback:
+                progress_callback(f"Found {len(pdf_files)} PDF files...")
+
+            # Process PDFs one by one with explicit cleanup to avoid file descriptor issues
+            all_documents = []
+            successful_files = []
+            failed_files = []
+
+            for i, pdf_file in enumerate(pdf_files):
+                try:
+                    if progress_callback:
+                        progress_callback(f"Processing {pdf_file.name} ({i+1}/{len(pdf_files)})...")
+
+                    # Use context manager for proper cleanup
+                    with pdf_loader_context(pdf_file) as loader:
+                        documents = loader.load()
+
+                        if documents:
+                            all_documents.extend(documents)
+                            successful_files.append(pdf_file.name)
+                        else:
+                            failed_files.append(f"{pdf_file.name} (no content)")
+
+                    # Force garbage collection after each PDF to free file descriptors
+                    gc.collect()
+
+                except Exception as pdf_error:
+                    failed_files.append(f"{pdf_file.name} ({str(pdf_error)[:50]}...)")
+                    gc.collect()  # Clean up even on error
+                    continue  # Skip problematic PDFs and continue with others
+
+            if not all_documents:
+                error_msg = "No documents could be processed successfully."
+                if failed_files:
+                    error_msg += f" Failed files: {', '.join(failed_files[:3])}"
+                    if len(failed_files) > 3:
+                        error_msg += f" and {len(failed_files) - 3} more"
+                raise ValueError(error_msg)
+
+            if progress_callback:
+                msg = f"Successfully loaded {len(successful_files)} files"
+                if failed_files:
+                    msg += f" ({len(failed_files)} failed)"
+                progress_callback(msg)
+
+            if progress_callback:
+                progress_callback(f"Splitting {len(all_documents)} documents...")
+
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap
+            )
+            texts = text_splitter.split_documents(all_documents)
+
+            # Clear large document list to free memory
+            del all_documents
+            gc.collect()
+
+            if progress_callback:
+                progress_callback(f"Creating embeddings for {len(texts)} chunks...")
+
+            # Create vectorstore with robust file descriptor handling
+            self.vectorstore = self._create_chroma_db(texts, db_path)
+
+            if progress_callback:
+                progress_callback("Setting up QA chain...")
+
+            self._setup_qa_chain()
+
+            success_msg = f"Database created with {len(texts)} chunks from {len(successful_files)} files"
+            if failed_files:
+                success_msg += f" ({len(failed_files)} files skipped due to errors)"
+
+            if progress_callback:
+                progress_callback(success_msg)
+
+        except Exception as e:
+            # Force cleanup on error
+            gc.collect()
+            # Re-raise with more context
+            raise Exception(f"Database creation failed: {str(e)}") from e
+
+    def _create_chroma_db(self, texts, db_path):
+        """Create ChromaDB with modern configuration and robust file descriptor handling"""
+        import os
+        import gc
+        import shutil
+        import time
+        from pathlib import Path
+
+        # Set comprehensive environment variables for ChromaDB
+        os.environ['ANONYMIZED_TELEMETRY'] = 'False'
+        os.environ['CHROMA_SERVER_NOFILE'] = '65536'  # Increase file descriptor limit for ChromaDB
+
+        try:
+            # Remove existing database if it exists
+            final_path = Path(db_path)
+            if final_path.exists():
+                shutil.rmtree(final_path)
+
+            # Create ChromaDB with modern configuration
+            # Use smaller batches and add delays to avoid file descriptor exhaustion
+            batch_size = 25  # Reduced batch size for better stability
+            delay_between_batches = 0.1  # Small delay to allow cleanup
+
+            vectorstore = None
+            total_batches = (len(texts) + batch_size - 1) // batch_size
+
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                batch_num = (i // batch_size) + 1
+
+                try:
+                    if vectorstore is None:
+                        # Create initial vectorstore with explicit settings
+                        vectorstore = Chroma.from_documents(
+                            documents=batch,
+                            embedding=self.embeddings,
+                            persist_directory=db_path,
+                            collection_metadata={"hnsw:space": "cosine"}
+                        )
+                    else:
+                        # Add to existing vectorstore
+                        vectorstore.add_documents(batch)
+
+                    # Force garbage collection and small delay between batches
+                    gc.collect()
+                    if batch_num < total_batches:  # Don't delay after last batch
+                        time.sleep(delay_between_batches)
+
+                except Exception:
+                    # If a batch fails, try to continue with smaller batches
+                    if batch_size > 5:
+                        # Retry with smaller batch size
+                        smaller_batch_size = max(5, batch_size // 2)
+                        for j in range(i, min(i + batch_size, len(texts)), smaller_batch_size):
+                            small_batch = texts[j:j + smaller_batch_size]
+                            try:
+                                if vectorstore is None:
+                                    vectorstore = Chroma.from_documents(
+                                        documents=small_batch,
+                                        embedding=self.embeddings,
+                                        persist_directory=db_path,
+                                        collection_metadata={"hnsw:space": "cosine"}
+                                    )
+                                else:
+                                    vectorstore.add_documents(small_batch)
+                                gc.collect()
+                                time.sleep(delay_between_batches)
+                            except Exception:
+                                # Skip this small batch and continue
+                                continue
+                    else:
+                        # Skip this batch entirely if we can't make it smaller
+                        continue
+
+            if vectorstore is None:
+                raise Exception("Failed to create any vectorstore - all batches failed. This may be due to embedding model issues or document processing problems.")
+
+            # Final garbage collection
+            gc.collect()
+            return vectorstore
+
+        except Exception as e:
+            # Clean up on failure
+            if final_path.exists():
+                try:
+                    shutil.rmtree(final_path)
+                except Exception:
+                    pass
+            gc.collect()
+            raise Exception(f"ChromaDB creation failed: {str(e)}") from e
+
     def _setup_qa_chain(self):
         """Setup the QA chain using modern LangChain approach"""
         system_prompt = (
@@ -316,7 +722,7 @@ class RAGSystem:
                 "chunk_size": self.chunk_size,
                 "retrieval_k": self.retrieval_k
             }
-        except:
+        except Exception:
             return {"document_count": "Unknown"}
 
 class RAGChatApp(App):
@@ -338,36 +744,41 @@ class RAGChatApp(App):
     .chat-area {
         width: 75%;
         layout: vertical;
+        height: 100%;
     }
-    
+
     .chat-container {
         height: 1fr;
         border: solid $accent;
-        margin: 1;
-    }
-    
-    .input-container {
-        height: 4;
-        border: solid $primary;
         margin: 1 1 0 1;
+        min-height: 10;
     }
-    
+
+    .input-container {
+        height: auto;
+        border: solid $primary;
+        margin: 0 1;
+        padding: 1;
+    }
+
     .status-container {
-        height: 3;
+        height: auto;
         background: $surface;
-        margin: 1;
+        margin: 0 1 1 1;
+        padding: 1;
     }
     
     /* Widgets */
     Input {
         width: 1fr;
-        margin: 1;
+        margin: 0;
     }
-    
+
     Button {
         width: auto;
         min-width: 12;
-        margin: 1;
+        margin: 0;
+        margin-left: 1;
     }
     
     .primary-btn {
@@ -406,10 +817,23 @@ class RAGChatApp(App):
          /* Modal screens */
      #settings-container, #help-container, #doc-browser-container {
          width: 80%;
-         height: 80%;
+         height: 90%;
+         max-height: 50;
          background: $surface;
          border: solid $primary;
          margin: 2;
+     }
+     
+     #settings-container VerticalScroll {
+         height: 1fr;
+         margin: 1;
+         padding: 1;
+     }
+     
+     #settings-container .button-row {
+         height: 3;
+         padding-top: 1;
+         align: center middle;
      }
     
     #settings-title, #help-title, #doc-title {
@@ -421,8 +845,9 @@ class RAGChatApp(App):
     
     /* Progress and status */
     .progress-container {
-        height: 3;
-        margin: 1;
+        height: auto;
+        margin: 0 1;
+        padding: 1;
     }
     
     ProgressBar {
@@ -470,7 +895,15 @@ class RAGChatApp(App):
     
     def __init__(self):
         super().__init__()
-        self.rag = RAGSystem()
+        self.settings_manager = SettingsManager()
+        # Initialize RAG system with saved settings
+        self.rag = RAGSystem(
+            model_name=self.settings_manager.get('model_name'),
+            temperature=self.settings_manager.get('temperature'),
+            chunk_size=self.settings_manager.get('chunk_size'),
+            chunk_overlap=self.settings_manager.get('chunk_overlap'),
+            retrieval_k=self.settings_manager.get('retrieval_k')
+        )
         self.chat_history = ChatHistory()
         self.current_progress = 0
         self.progress_timer = None
@@ -647,40 +1080,84 @@ class RAGChatApp(App):
         """Create database with enhanced progress tracking"""
         chat = self.query_one("#chat", RichLog)
         self.processing = True
-        
+
         try:
-            progress_steps = [
-                "📂 Scanning documents directory...",
-                "📄 Loading PDF documents...", 
-                "✂️ Splitting documents into chunks...",
-                "🧮 Creating embeddings...",
-                "💾 Building vector database...",
-                "🔗 Setting up QA chain...",
-                "✅ Database creation complete!"
-            ]
-            
-            for i, step in enumerate(progress_steps[:-1]):
-                self.update_progress(step, (i / len(progress_steps)) * 100)
-                await asyncio.sleep(0.3)
-            
-            # Define progress callback
-            def progress_callback(message):
-                # This runs in the executor thread, so we need to be careful
-                pass
-            
-            await asyncio.get_event_loop().run_in_executor(
-                None, 
-                lambda: self.rag.create_db_from_docs(progress_callback=progress_callback)
-            )
-            
-            self.update_progress(progress_steps[-1], 100)
-            chat.write("[green]✅ Database created successfully![/green]")
-            self.update_stats()
-            
+            # Check if documents directory exists
+            docs_path = Path("./documents")
+            if not docs_path.exists():
+                raise ValueError("Documents directory './documents' not found. Please create it and add PDF files.")
+
+            # Check if there are any PDF files
+            pdf_files = list(docs_path.glob("**/*.pdf"))
+            if not pdf_files:
+                raise ValueError("No PDF files found in './documents' directory. Please add some PDF files.")
+
+            self.update_progress(f"📂 Found {len(pdf_files)} PDF files...", 10)
+            await asyncio.sleep(0.5)
+
+            # Create database with detailed progress tracking
+            try:
+                # Define a thread-safe progress callback that updates the UI
+                progress_messages = []
+
+                def progress_callback(message):
+                    progress_messages.append(message)
+
+                # Run database creation in thread executor to avoid async context issues
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    lambda: self.rag.create_db_from_docs(
+                        docs_path="./documents",
+                        db_path="./chroma_db",
+                        progress_callback=progress_callback
+                    )
+                )
+
+                self.update_progress("✅ Database creation complete!", 100)
+                chat.write("[green]✅ Database created successfully![/green]")
+
+                # Show progress messages that were collected
+                if progress_messages:
+                    chat.write(f"[blue]📊 Processing summary: {progress_messages[-1]}[/blue]")
+
+                # Show summary of what was processed
+                stats = self.rag.get_stats()
+                if stats and stats.get("document_count", 0) > 0:
+                    chat.write(f"[blue]📊 Processed {stats['document_count']} document chunks[/blue]")
+
+                self.update_stats()
+
+            except Exception as pdf_error:
+                # More specific error handling for PDF processing issues
+                error_msg = str(pdf_error)
+
+
+
+                if "all batches failed" in error_msg.lower():
+                    chat.write("[red]❌ Database creation failed: All document batches failed to process[/red]")
+                    chat.write("[yellow]💡 This may be due to embedding model issues or document format problems.[/yellow]")
+                    chat.write("[yellow]💡 Try restarting the application or check the terminal for detailed errors.[/yellow]")
+                elif "fds_to_keep" in error_msg or "file descriptor" in error_msg.lower():
+                    chat.write("[red]❌ PDF processing error: File descriptor issue[/red]")
+                    chat.write("[yellow]💡 This is often caused by corrupted PDFs or system limitations.[/yellow]")
+                    chat.write("[yellow]💡 Try removing problematic PDF files or restarting the application.[/yellow]")
+                elif "No PDF files found" in error_msg:
+                    chat.write("[red]❌ No PDF files found in ./documents directory[/red]")
+                    chat.write("[yellow]💡 Please add some PDF files to the ./documents directory.[/yellow]")
+                elif "No documents could be processed" in error_msg:
+                    chat.write("[red]❌ All PDF files failed to process[/red]")
+                    chat.write("[yellow]💡 Check if your PDF files are corrupted or password-protected.[/yellow]")
+                else:
+                    chat.write(f"[red]❌ Database creation error: {error_msg}[/red]")
+                    chat.write("[yellow]💡 Check the error message above for specific details.[/yellow]")
+
+                self.update_progress(f"❌ Error: {error_msg[:50]}...")
+
         except Exception as e:
             chat.write(f"[red]❌ Error creating database: {str(e)}[/red]")
             self.update_progress(f"❌ Error: {str(e)}")
-        
+
         await asyncio.sleep(1.5)
         self.processing = False
     
@@ -714,7 +1191,7 @@ class RAGChatApp(App):
         
         try:
             # Show thinking indicator
-            thinking_msg = chat.write("[dim]🧠 Processing your question...[/dim]")
+            chat.write("[dim]🧠 Processing your question...[/dim]")
             
             start_time = time.time()
             answer = await self.rag.query(question)
@@ -793,6 +1270,10 @@ class RAGChatApp(App):
         history_content.clear()
         history_content.write("[green]🆕 New session started[/green]")
     
+    def action_quit(self) -> None:
+        """Quit the application."""
+        self.exit()
+
     def action_export_chat(self) -> None:
         """Export current chat session."""
         try:

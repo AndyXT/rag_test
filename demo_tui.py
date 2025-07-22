@@ -70,7 +70,11 @@ class ChatHistory:
 
 class SettingsScreen(ModalScreen):
     """Modal screen for application settings"""
-    
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+    ]
+
     def compose(self) -> ComposeResult:
         with Container(id="settings-container"):
             yield Static("⚙️ Settings", id="settings-title")
@@ -102,6 +106,18 @@ class SettingsScreen(ModalScreen):
                 with Horizontal():
                     yield Button("Save", variant="primary", id="save-settings")
                     yield Button("Cancel", id="cancel-settings")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses in settings screen"""
+        if event.button.id == "cancel-settings":
+            self.dismiss()
+        elif event.button.id == "save-settings":
+            # TODO: Implement settings save logic
+            self.dismiss()
+
+    def action_dismiss(self) -> None:
+        """Handle escape key to close modal"""
+        self.dismiss()
 
 class HelpScreen(ModalScreen):
     """Modal screen showing help and keyboard shortcuts"""
@@ -245,36 +261,41 @@ class RAGChatApp(App):
     .chat-area {
         width: 75%;
         layout: vertical;
+        height: 100%;
     }
-    
+
     .chat-container {
         height: 1fr;
         border: solid $accent;
-        margin: 1;
-    }
-    
-    .input-container {
-        height: 4;
-        border: solid $primary;
         margin: 1 1 0 1;
+        min-height: 10;
     }
-    
+
+    .input-container {
+        height: auto;
+        border: solid $primary;
+        margin: 0 1;
+        padding: 1;
+    }
+
     .status-container {
-        height: 3;
+        height: auto;
         background: $surface;
-        margin: 1;
+        margin: 0 1 1 1;
+        padding: 1;
     }
-    
+
     /* Widgets */
     Input {
         width: 1fr;
-        margin: 1;
+        margin: 0;
     }
-    
+
     Button {
         width: auto;
         min-width: 12;
-        margin: 1;
+        margin: 0;
+        margin-left: 1;
     }
     
     .primary-btn {
@@ -328,8 +349,9 @@ class RAGChatApp(App):
     
     /* Progress and status */
     .progress-container {
-        height: 3;
-        margin: 1;
+        height: auto;
+        margin: 0 1;
+        padding: 1;
     }
     
     ProgressBar {
