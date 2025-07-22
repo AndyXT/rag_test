@@ -57,7 +57,7 @@ class SettingsManager:
                     loaded = json.load(f)
                     # Merge with defaults to handle missing keys
                     return {**self.default_settings, **loaded}
-        except (IOError, json.JSONDecodeError, KeyError) as e:
+        except (IOError, OSError, PermissionError, json.JSONDecodeError, KeyError, TypeError, AttributeError) as e:
             print(f"Warning: Could not load settings from {self.settings_file}: {e}")
             pass
         return self.default_settings.copy()
@@ -70,7 +70,7 @@ class SettingsManager:
             with open(self.settings_file, 'w') as f:
                 json.dump(self.settings, f, indent=2)
             return True
-        except (IOError, TypeError) as e:
+        except (IOError, OSError, PermissionError, TypeError) as e:
             print(f"Warning: Could not save settings to {self.settings_file}: {e}")
             return False
     
@@ -96,7 +96,7 @@ class ChatHistory:
                 with open(self.history_file, 'r') as f:
                     data = json.load(f)
                     self.sessions = data.get('sessions', [])
-        except (IOError, json.JSONDecodeError, KeyError) as e:
+        except (IOError, OSError, PermissionError, json.JSONDecodeError, KeyError, TypeError, AttributeError) as e:
             print(f"Warning: Could not load chat history from {self.history_file}: {e}")
             self.sessions = []
     
@@ -105,7 +105,7 @@ class ChatHistory:
         try:
             with open(self.history_file, 'w') as f:
                 json.dump({'sessions': self.sessions}, f, indent=2)
-        except (IOError, TypeError) as e:
+        except (IOError, OSError, PermissionError, TypeError) as e:
             print(f"Warning: Could not save chat history to {self.history_file}: {e}")
     
     def add_exchange(self, question: str, answer: str) -> None:
