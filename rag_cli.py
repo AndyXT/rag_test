@@ -39,12 +39,18 @@ os.environ['OMP_NUM_THREADS'] = '1'  # Reduce threading issues
 os.environ['MKL_NUM_THREADS'] = '1'  # Reduce threading issues
 
 # Set cache directories with better control
+# Use HF_HOME as the main cache directory (TRANSFORMERS_CACHE is deprecated)
 os.environ['HF_HOME'] = os.path.expanduser('~/.cache/huggingface')
-os.environ['TRANSFORMERS_CACHE'] = os.path.expanduser('~/.cache/huggingface/transformers')
 os.environ['HF_DATASETS_CACHE'] = os.path.expanduser('~/.cache/huggingface/datasets')
 
 # Ensure cache directories exist
-for cache_dir in [os.environ['HF_HOME'], os.environ['TRANSFORMERS_CACHE'], os.environ['HF_DATASETS_CACHE']]:
+cache_dirs = [
+    os.environ['HF_HOME'],
+    os.environ['HF_DATASETS_CACHE'],
+    os.path.join(os.environ['HF_HOME'], 'hub'),
+    os.path.join(os.environ['HF_HOME'], 'transformers')
+]
+for cache_dir in cache_dirs:
     os.makedirs(cache_dir, exist_ok=True)
 
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -547,7 +553,7 @@ class RAGSystem:
                     model_kwargs={
                         'device': 'cpu',
                         'trust_remote_code': False,
-                        'cache_dir': os.environ['TRANSFORMERS_CACHE']  # Explicit cache dir
+                        'cache_dir': os.environ['HF_HOME']  # Explicit cache dir
                     },
                     encode_kwargs={
                         'normalize_embeddings': True,
@@ -1026,7 +1032,6 @@ Answer:"""
         """Ensure all required cache directories exist and are writable"""
         cache_dirs = [
             os.environ['HF_HOME'],
-            os.environ['TRANSFORMERS_CACHE'],
             os.environ['HF_DATASETS_CACHE'],
             os.path.join(os.environ['HF_HOME'], 'hub'),
             os.path.join(os.environ['HF_HOME'], 'transformers'),
