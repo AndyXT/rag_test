@@ -16,11 +16,11 @@ from textual.binding import Binding
 # Optional clipboard support
 try:
     import pyperclip  # For clipboard support
-    PYPERCLIP_AVAILABLE = True
 except ImportError:
     pyperclip = None  # Fallback to file export
-    PYPERCLIP_AVAILABLE = False
 
+# Constants
+PYPERCLIP_AVAILABLE = pyperclip is not None
 # Set environment variables for better cache management and to prevent conflicts
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Prevent tokenizer parallelism issues
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Reduce verbosity
