@@ -856,7 +856,7 @@ class RAGSystem:
                     model_kwargs={
                         "device": "cpu",
                         "trust_remote_code": False,
-                        "cache_folder": os.environ["HF_HOME"],  # Explicit cache folder
+                        "cache_dir": os.environ["HF_HOME"],  # Explicit cache directory
                     },
                     encode_kwargs={
                         "normalize_embeddings": True,
