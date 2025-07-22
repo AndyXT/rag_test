@@ -402,9 +402,12 @@ class DocumentBrowserScreen(ModalScreen):
 class RAGSystem:
     """Enhanced RAG System with modern configuration and robust error handling"""
     
-    def __init__(self, model_name="llama3.2:3b", temperature=0.1):
+    def __init__(self, model_name="llama3.2:3b", temperature=0.1, chunk_size=1000, chunk_overlap=200, retrieval_k=3):
         self.model_name = model_name
         self.temperature = temperature
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.retrieval_k = retrieval_k
         self.llm = None
         self.embeddings = None
         self.vectorstore = None
