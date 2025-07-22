@@ -1073,11 +1073,11 @@ class RAGChatApp(App):
         self.settings_manager = SettingsManager()
         # Initialize RAG system with saved settings
         self.rag = RAGSystem(
-            model_name=self.settings_manager.get('model_name'),
-            temperature=self.settings_manager.get('temperature'),
-            chunk_size=self.settings_manager.get('chunk_size'),
-            chunk_overlap=self.settings_manager.get('chunk_overlap'),
-            retrieval_k=self.settings_manager.get('retrieval_k')
+            model_name=self.settings_manager.get('model_name', 'llama3.2:3b'),
+            temperature=self.settings_manager.get('temperature', 0.1),
+            chunk_size=self.settings_manager.get('chunk_size', 1000),
+            chunk_overlap=self.settings_manager.get('chunk_overlap', 200),
+            retrieval_k=self.settings_manager.get('retrieval_k', 3)
         )
         self.chat_history = ChatHistory()
         self.current_progress = 0
