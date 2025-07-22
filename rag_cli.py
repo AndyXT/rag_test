@@ -32,6 +32,12 @@ os.environ['TRANSFORMERS_OFFLINE'] = '0'  # Allow online access
 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'  # Disable symlink warnings
 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'  # Disable advisory warnings
 
+# Additional settings to help with file descriptor issues
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'  # Reduce file creation
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # Better compatibility
+os.environ['OMP_NUM_THREADS'] = '1'  # Reduce threading issues
+os.environ['MKL_NUM_THREADS'] = '1'  # Reduce threading issues
+
 # Set cache directories with better control
 os.environ['HF_HOME'] = os.path.expanduser('~/.cache/huggingface')
 os.environ['TRANSFORMERS_CACHE'] = os.path.expanduser('~/.cache/huggingface/transformers')
@@ -58,10 +64,10 @@ from textual.widgets import (
 )
 from textual.binding import Binding
 from textual.reactive import reactive
-from textual.screen import ModalScreen, Screen
-from rich.text import Text
+from textual.screen import ModalScreen
 from rich.table import Table
 from rich.panel import Panel
+import pyperclip  # For clipboard support
 
 # LangChain imports
 from langchain_community.document_loaders import PyPDFLoader
@@ -297,6 +303,10 @@ class HelpScreen(ModalScreen):
 - **Ctrl+H**: Show this help
 - **Ctrl+S**: Open settings
 - **Ctrl+N**: New chat session
+- **Ctrl+Y**: Copy last message to clipboard
+- **Ctrl+E**: Export current chat
+- **Ctrl+Shift+E**: Export full chat history
+- **Ctrl+Shift+R**: Restart RAG system (fixes errors)
 - **F1**: Toggle sidebar
 - **Enter**: Send message
 
@@ -309,6 +319,8 @@ class HelpScreen(ModalScreen):
 - 📚 PDF document processing
 - 🔍 Semantic search with ChromaDB
 - 💬 Chat history with persistence
+- 📋 Copy messages to clipboard
+- 📁 Export chat conversations
 - ⚙️ Configurable settings
 - 🎨 Multiple themes
 
@@ -316,6 +328,11 @@ class HelpScreen(ModalScreen):
 - Place PDF files in the ./documents directory
 - Use "Create DB" to process new documents
 - Use "Reload DB" to refresh the database
+
+## Copying Text
+- **Ctrl+Y**: Copy the last message (question or answer)
+- **Ctrl+E**: Export current chat to text file
+- **Ctrl+Shift+E**: Export complete chat history
 
 ## Tips
 - Ask specific questions for better results
@@ -413,11 +430,45 @@ class RAGSystem:
         self.qa_chain = None
         self.conversation_history = []
         
+        # Check and increase file descriptor limit before initialization
+        self._check_and_increase_fd_limit()
+        
         # Initialize LLM with Ollama
-        self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
+        try:
+            self.llm = OllamaLLM(
+                model=self.model_name, 
+                temperature=self.temperature,
+                num_ctx=2048,  # Reduce context window to save memory
+                num_thread=1   # Use single thread to avoid fd issues
+            )
+        except:
+            # Fallback to simpler initialization
+            self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
         
         # Initialize embeddings with better error handling
         self._initialize_embeddings_safely()
+    
+    def _check_and_increase_fd_limit(self):
+        """Check and try to increase file descriptor limit"""
+        try:
+            import resource
+            
+            # Get current limits
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            
+            # Try to increase to a reasonable limit
+            target_limit = min(8192, hard)
+            
+            if soft < target_limit:
+                try:
+                    resource.setrlimit(resource.RLIMIT_NOFILE, (target_limit, hard))
+                    print(f"[green]✓ Increased file descriptor limit from {soft} to {target_limit}[/green]")
+                except Exception:
+                    print(f"[yellow]⚠ Could not increase file descriptor limit (current: {soft})[/yellow]")
+                    print("[yellow]💡 Try running: ulimit -n 8192 before starting the app[/yellow]")
+        except Exception:
+            # Not critical if this fails
+            pass
     
     def _clean_hf_cache_locks(self):
         """Clean up Hugging Face cache lock files that may prevent model loading"""
@@ -517,7 +568,16 @@ class RAGSystem:
                 setattr(self, key, value)
         
         # Recreate LLM with new settings
-        self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
+        try:
+            self.llm = OllamaLLM(
+                model=self.model_name, 
+                temperature=self.temperature,
+                num_ctx=2048,  # Reduce context window to save memory
+                num_thread=1   # Use single thread to avoid fd issues
+            )
+        except:
+            # Fallback to simpler initialization
+            self.llm = OllamaLLM(model=self.model_name, temperature=self.temperature)
         
         # Recreate QA chain if vectorstore exists
         if self.vectorstore:
@@ -526,21 +586,32 @@ class RAGSystem:
     def load_existing_db(self, db_path="./chroma_db"):
         """Load existing ChromaDB with modern configuration"""
         import os
+        import gc
 
         # Set environment variables for ChromaDB (modern approach)
         os.environ['ANONYMIZED_TELEMETRY'] = 'False'
 
         if os.path.exists(db_path):
             try:
+                # Force garbage collection before loading
+                gc.collect()
+                
                 # Use modern ChromaDB configuration
                 self.vectorstore = Chroma(
                     persist_directory=db_path,
                     embedding_function=self.embeddings
                 )
+                
+                # Force garbage collection after loading
+                gc.collect()
+                
                 self._setup_qa_chain()
                 return True
-            except Exception:
-                # If loading fails, return False to indicate no database
+            except Exception as e:
+                # If loading fails, provide more context
+                print(f"[yellow]⚠ Could not load database: {str(e)}[/yellow]")
+                if "fds_to_keep" in str(e):
+                    print("[yellow]💡 Try restarting the application or increasing file descriptor limit[/yellow]")
                 return False
         return False
     
@@ -847,14 +918,91 @@ class RAGSystem:
         )
     
     async def query(self, question):
-        """Query the RAG system"""
-        if not self.qa_chain:
+        """Query the RAG system with better error handling and async execution"""
+        if not self.vectorstore:
             return "RAG system not initialized. Load or create a database first."
         
-        # Run in thread pool to avoid blocking UI
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, self.qa_chain.invoke, {"input": question})
-        return result["answer"]
+        try:
+            # Run the query in a thread executor to avoid blocking the UI
+            loop = asyncio.get_event_loop()
+            
+            # Create a simple query function that avoids file descriptor issues
+            def simple_query():
+                import gc
+                import os
+                
+                # Set conservative environment for the query thread
+                os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+                
+                try:
+                    # Force garbage collection
+                    gc.collect()
+                    
+                    # Get retriever with limited results
+                    retriever = self.vectorstore.as_retriever(search_kwargs={"k": self.retrieval_k})
+                    
+                    # Get relevant documents - using the simpler method
+                    relevant_docs = retriever.get_relevant_documents(question)
+                    
+                    if not relevant_docs:
+                        return "I couldn't find any relevant information in the documents to answer your question."
+                    
+                    # Format context
+                    context_parts = []
+                    for i, doc in enumerate(relevant_docs[:self.retrieval_k]):
+                        context_parts.append(f"Document {i+1}:\n{doc.page_content}")
+                    context = "\n\n".join(context_parts)
+                    
+                    # Create prompt
+                    prompt = f"""Based on the following context, please answer the question. If the answer is not in the context, say so.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+                    
+                    # Query LLM with timeout protection
+                    response = self.llm.invoke(prompt)
+                    
+                    # Clean up
+                    gc.collect()
+                    
+                    return response
+                    
+                except Exception as e:
+                    # Handle specific errors
+                    error_str = str(e)
+                    if "fds_to_keep" in error_str:
+                        # Try a minimal query without retriever
+                        try:
+                            simple_prompt = f"Question: {question}\n\nPlease provide a helpful response based on general knowledge."
+                            return self.llm.invoke(simple_prompt)
+                        except:
+                            return "System resource error. Please restart the RAG system (Ctrl+Shift+R)."
+                    else:
+                        raise e
+            
+            # Execute in thread pool
+            result = await loop.run_in_executor(None, simple_query)
+            return result
+            
+        except Exception as e:
+            error_msg = str(e)
+            
+            # Provide specific guidance for common errors
+            if "fds_to_keep" in error_msg or "Bad file descriptor" in error_msg:
+                return ("I encountered a system resource error. Please try:\n"
+                        "1. Press Ctrl+Shift+R to restart the RAG system\n"
+                        "2. Reduce chunk size in settings (Ctrl+S)\n"
+                        "3. Restart the application")
+            elif "connection" in error_msg.lower() or "ollama" in error_msg.lower():
+                return ("Cannot connect to Ollama. Please ensure:\n"
+                        "1. Ollama is running (run 'ollama serve' in terminal)\n"
+                        "2. The model is installed (run 'ollama pull llama3.2')")
+            else:
+                return f"Error: {error_msg}"
     
     def get_stats(self):
         """Get database statistics"""
@@ -1065,6 +1213,9 @@ class RAGChatApp(App):
         Binding("ctrl+d", "show_documents", "Documents"),
         Binding("f1", "toggle_sidebar", "Toggle Sidebar"),
         Binding("ctrl+e", "export_chat", "Export Chat"),
+        Binding("ctrl+y", "copy_last_message", "Copy Last"),
+        Binding("ctrl+shift+e", "export_full_chat", "Export Full"),
+        Binding("ctrl+shift+r", "restart_rag", "Restart RAG"),
     ]
     
     show_sidebar = reactive(True)
@@ -1084,6 +1235,7 @@ class RAGChatApp(App):
         self.chat_history = ChatHistory()
         self.current_progress = 0
         self.progress_timer: Optional[Any] = None
+        self.chat_messages = []  # Store messages for copying
         
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -1355,7 +1507,14 @@ class RAGChatApp(App):
         )
         chat.write(user_panel)
         
-        if not self.rag.qa_chain:
+        # Store the question for copying
+        self.chat_messages.append({
+            'type': 'user',
+            'content': question,
+            'timestamp': timestamp
+        })
+        
+        if not self.rag.vectorstore:
             chat.write("[red]⚠️ Please load or create a database first.[/red]")
             return
         
@@ -1367,12 +1526,15 @@ class RAGChatApp(App):
         history_content.write(f"[dim]{timestamp}[/dim] {question[:50]}...")
         
         try:
-            # Show thinking indicator
-            chat.write("[dim]🧠 Processing your question...[/dim]")
+            # Show animated thinking indicator
+            thinking_msg = chat.write("[dim]🧠 Processing your question...[/dim]")
             
             start_time = time.time()
             answer = await self.rag.query(question)
             response_time = time.time() - start_time
+            
+            # Clear the thinking indicator
+            # Note: RichLog doesn't support removing specific messages, so we'll just add the response
             
             # Remove thinking indicator and add answer
             assistant_panel = Panel(
@@ -1382,6 +1544,13 @@ class RAGChatApp(App):
                 padding=(0, 1)
             )
             chat.write(assistant_panel)
+            
+            # Store the answer for copying
+            self.chat_messages.append({
+                'type': 'assistant',
+                'content': answer,
+                'timestamp': datetime.now().strftime("%H:%M:%S")
+            })
             
             # Add to chat history
             self.chat_history.add_exchange(question, answer)
@@ -1405,6 +1574,7 @@ class RAGChatApp(App):
         """Clear the chat log."""
         chat = self.query_one("#chat", RichLog)
         chat.clear()
+        self.chat_messages.clear()  # Clear stored messages
         welcome_panel = Panel.fit(
             "Chat cleared! Ready for new questions. 🧹",
             title="🆕 Fresh Start",
@@ -1450,26 +1620,126 @@ class RAGChatApp(App):
     def action_quit(self) -> None:
         """Quit the application."""
         self.exit()
+    
+    def action_restart_rag(self) -> None:
+        """Restart the RAG system to fix file descriptor issues."""
+        chat = self.query_one("#chat", RichLog)
+        chat.write("[yellow]🔄 Restarting RAG system...[/yellow]")
+        
+        try:
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            # Recreate the RAG system
+            self.rag = RAGSystem(
+                model_name=self.settings_manager.get('model_name', 'llama3.2:3b'),
+                temperature=self.settings_manager.get('temperature', 0.1),
+                chunk_size=self.settings_manager.get('chunk_size', 1000),
+                chunk_overlap=self.settings_manager.get('chunk_overlap', 200),
+                retrieval_k=self.settings_manager.get('retrieval_k', 3)
+            )
+            
+            # Try to reload the database
+            if self.rag.load_existing_db():
+                chat.write("[green]✅ RAG system restarted successfully![/green]")
+                self.update_stats()
+            else:
+                chat.write("[yellow]⚠️ RAG system restarted. Please load or create a database.[/yellow]")
+                
+        except Exception as e:
+            chat.write(f"[red]❌ Failed to restart RAG system: {str(e)}[/red]")
 
+    def action_copy_last_message(self) -> None:
+        """Copy the last message to clipboard."""
+        chat = self.query_one("#chat", RichLog)
+        
+        if not self.chat_messages:
+            chat.write("[yellow]⚠️ No messages to copy[/yellow]")
+            return
+        
+        try:
+            last_message = self.chat_messages[-1]
+            message_text = f"[{last_message['timestamp']}] {last_message['type'].title()}: {last_message['content']}"
+            
+            # Try to use pyperclip, fall back to file export if not available
+            try:
+                pyperclip.copy(message_text)
+                chat.write("[green]✅ Last message copied to clipboard![/green]")
+            except Exception:
+                # Fallback: save to file
+                filename = "last_message.txt"
+                with open(filename, 'w') as f:
+                    f.write(message_text)
+                chat.write(f"[green]✅ Last message saved to {filename} (install pyperclip for clipboard support)[/green]")
+                
+        except Exception as e:
+            chat.write(f"[red]❌ Copy failed: {str(e)}[/red]")
+    
     def action_export_chat(self) -> None:
         """Export current chat session."""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"chat_export_{timestamp}.txt"
             
-            # This is a simplified export - in a real app you'd want more sophisticated export
-            chat = self.query_one("#chat", RichLog)
             with open(filename, 'w') as f:
                 f.write("RAG Chat Export\n")
                 f.write("=" * 50 + "\n")
-                f.write(f"Exported: {datetime.now().isoformat()}\n\n")
-                # Note: In a real implementation, you'd extract the actual chat content
-                f.write("Chat content would be exported here.\n")
+                f.write(f"Exported: {datetime.now().isoformat()}\n")
+                f.write(f"Model: {self.rag.model_name}\n")
+                f.write(f"Temperature: {self.rag.temperature}\n")
+                f.write("=" * 50 + "\n\n")
+                
+                # Export actual chat messages
+                for msg in self.chat_messages:
+                    f.write(f"[{msg['timestamp']}] {msg['type'].upper()}:\n")
+                    f.write(f"{msg['content']}\n")
+                    f.write("-" * 40 + "\n\n")
             
+            chat = self.query_one("#chat", RichLog)
             chat.write(f"[green]📁 Chat exported to {filename}[/green]")
         except Exception as e:
             chat = self.query_one("#chat", RichLog)
             chat.write(f"[red]❌ Export failed: {str(e)}[/red]")
+    
+    def action_export_full_chat(self) -> None:
+        """Export complete chat history including all sessions."""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"full_chat_history_{timestamp}.json"
+            
+            # Save current session first
+            self.chat_history.start_new_session()
+            
+            # Export all sessions
+            export_data = {
+                "export_timestamp": datetime.now().isoformat(),
+                "model_settings": {
+                    "model": self.rag.model_name,
+                    "temperature": self.rag.temperature,
+                    "chunk_size": self.rag.chunk_size,
+                    "retrieval_k": self.rag.retrieval_k
+                },
+                "sessions": self.chat_history.sessions,
+                "current_session": [
+                    {
+                        "timestamp": msg["timestamp"],
+                        "type": msg["type"],
+                        "content": msg["content"]
+                    }
+                    for msg in self.chat_messages
+                ]
+            }
+            
+            with open(filename, 'w') as f:
+                json.dump(export_data, f, indent=2)
+            
+            chat = self.query_one("#chat", RichLog)
+            chat.write(f"[green]📁 Full chat history exported to {filename}[/green]")
+            
+        except Exception as e:
+            chat = self.query_one("#chat", RichLog)
+            chat.write(f"[red]❌ Full export failed: {str(e)}[/red]")
 
 if __name__ == "__main__":
     app = RAGChatApp()

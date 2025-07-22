@@ -1695,6 +1695,12 @@ wheels = [
 ]
 
 [[package]]
+name = "pyperclip"
+version = "1.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/23/2f0a3efc4d6a32f3b63cdff36cd398d9701d26cda58e3ab97ac79fb5e60d/pyperclip-1.9.0.tar.gz", hash = "sha256:b7de0142ddc81bfc5c7507eea19da920b92252b548b96186caf94a5e2527d310", size = 20961, upload-time = "2024-06-18T20:38:48.401Z" }
+
+[[package]]
 name = "pypika"
 version = "0.48.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1772,6 +1778,7 @@ dependencies = [
     { name = "langchain-text-splitters" },
     { name = "ollama" },
     { name = "pypdf" },
+    { name = "pyperclip" },
     { name = "rich" },
     { name = "sentence-transformers" },
     { name = "textual" },
@@ -1790,6 +1797,7 @@ requires-dist = [
     { name = "langchain-text-splitters", specifier = ">=0.3.8" },
     { name = "ollama", specifier = ">=0.5.1" },
     { name = "pypdf", specifier = ">=5.8.0" },
+    { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "rich", specifier = ">=14.0.0" },
     { name = "sentence-transformers", specifier = ">=5.0.0" },
     { name = "textual", specifier = ">=4.0.0" },

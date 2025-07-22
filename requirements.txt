@@ -14,3 +14,4 @@ chromadb
 sentence-transformers
 pypdf
 ollama
+pyperclip  # For clipboard support
