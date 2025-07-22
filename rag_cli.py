@@ -750,8 +750,8 @@ class RAGSystem:
         api_base = self.settings_manager.get("api_base_url", "")
         model = self.settings_manager.get("openai_model", "gpt-3.5-turbo")
 
-        if not api_key:
-            raise ValueError("OpenAI API key is required but not provided in settings")
+        if not api_key or not api_key.strip():
+            raise ValueError("OpenAI API key is required but is missing or contains only whitespace")
 
         kwargs = {"model": model, "temperature": self.temperature, "api_key": api_key}
 
