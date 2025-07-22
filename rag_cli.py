@@ -766,9 +766,9 @@ class RAGSystem:
         api_key = self.settings_manager.get("api_key", "")
         model = self.settings_manager.get("anthropic_model", "claude-3-haiku-20240307")
 
-        if not api_key:
+        if not api_key or not api_key.strip():
             raise ValueError(
-                "Anthropic API key is required but not provided in settings"
+                "Anthropic API key is required but not provided in settings or is invalid (whitespace-only)"
             )
 
         self.llm = ChatAnthropic(
