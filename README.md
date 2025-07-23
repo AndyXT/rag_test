@@ -39,6 +39,9 @@ A sophisticated Text User Interface (TUI) for Retrieval-Augmented Generation (RA
    ```bash
    pip install -r requirements.txt
    ```
+   
+   **Note**: The requirements include compatible versions of all LangChain packages and their dependencies to avoid conflicts.
+   
 3. **Install Ollama** (if not already installed):
    ```bash
    # On Linux/macOS
@@ -84,8 +87,15 @@ A sophisticated Text User Interface (TUI) for Retrieval-Augmented Generation (RA
 
 ## ⚙️ Configuration
 
-### Model Settings
-- **Model Name**: Choose different Ollama models (default: llama3.2)
+### LLM Provider Settings
+- **Provider**: Choose between Ollama (local), OpenAI API, or Anthropic API
+- **Ollama Model**: Choose different Ollama models (default: llama3.2) when using Ollama
+- **API Key**: Your API key for OpenAI or Anthropic (when using API providers)
+- **API Base URL**: Custom API endpoint (optional, for OpenAI-compatible APIs)
+- **OpenAI Model**: Model name for OpenAI (default: gpt-3.5-turbo)
+- **Anthropic Model**: Model name for Anthropic (default: claude-3-haiku-20240307)
+
+### General Settings
 - **Temperature**: Control response creativity (0.0-1.0)
 - **Chunk Size**: Document splitting size (default: 1000)
 - **Chunk Overlap**: Overlap between chunks (default: 200)
@@ -140,9 +150,10 @@ A sophisticated Text User Interface (TUI) for Retrieval-Augmented Generation (RA
 
 ### Common Issues
 1. **No documents found**: Ensure PDF files are in `./documents/`
-2. **Ollama not running**: Start Ollama service and pull the model
-3. **Import errors**: Install all requirements with `pip install -r requirements.txt`
-4. **Database errors**: Check file permissions in the workspace directory
+2. **Ollama not running**: Start Ollama service and pull the model, or switch to an API provider in Settings (Ctrl+S)
+3. **API errors**: Check your API key and model settings for OpenAI/Anthropic providers
+4. **Import errors**: Install all requirements with `pip install -r requirements.txt`
+5. **Database errors**: Check file permissions in the workspace directory
 
 ### Tips
 - Use specific, well-formed questions for better results

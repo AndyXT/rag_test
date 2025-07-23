@@ -1,9 +1,13 @@
 {
-  "model_name": "qwen3:30b-a3b",
-  "temperature": 0.0,
+  "ollama_model": "llama3.2:3b",
+  "temperature": 0.1,
   "chunk_size": 1000,
   "chunk_overlap": 200,
   "retrieval_k": 3,
   "auto_save": true,
-  "dark_mode": false
+  "dark_mode": false,
+  "llm_provider": "ollama",
+  "api_base_url": "",
+  "openai_model": "gpt-3.5-turbo",
+  "anthropic_model": "claude-3-haiku-20240307"
 }
