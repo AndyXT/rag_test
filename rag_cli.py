@@ -97,6 +97,7 @@ class SettingsManager:
             "retrieval_k": 3,
             "auto_save": True,
             "dark_mode": False,
+            "show_context": False,  # Toggle for showing retrieved context
             "llm_provider": "ollama",  # 'ollama', 'openai', 'anthropic'
             "api_key": "",  # For API providers
             "api_base_url": "",  # For custom API endpoints
@@ -233,12 +234,19 @@ class SettingsScreen(ModalScreen):
         self.query_one("#retrieval-input", Input).value = str(
             settings.get("retrieval_k", 3)
         )
+        
+        # Update show context switch
+        self.query_one("#show-context-switch", Switch).value = settings.get("show_context", False)
 
         # Update LLM provider settings
         provider_select = self.query_one("#provider-select", Select)
         provider_select.value = settings.get("llm_provider", "ollama")
 
-        self.query_one("#api-key-input", Input).value = str(settings.get("api_key", ""))
+        # Show API key status (from environment or settings)
+        api_key_value = settings.get("api_key", "")
+        if os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+            api_key_value = "(Using environment variable)"
+        self.query_one("#api-key-input", Input).value = str(api_key_value)
         self.query_one("#api-base-input", Input).value = str(
             settings.get("api_base_url", "")
         )
@@ -295,7 +303,7 @@ class SettingsScreen(ModalScreen):
                 yield Label("API Key:", id="api-key-label", classes="api-field")
                 yield Input(
                     value="",
-                    placeholder="Your API key",
+                    placeholder="Your API key (or set OPENAI_API_KEY/ANTHROPIC_API_KEY env var)",
                     password=True,
                     id="api-key-input",
                     classes="api-field",
@@ -306,7 +314,7 @@ class SettingsScreen(ModalScreen):
                 )
                 yield Input(
                     value="",
-                    placeholder="Custom API endpoint",
+                    placeholder="Custom API endpoint (or set OPENAI_API_BASE env var)",
                     id="api-base-input",
                     classes="api-field",
                 )
@@ -355,6 +363,10 @@ class SettingsScreen(ModalScreen):
                 with Horizontal():
                     yield Switch(value=False, id="dark-mode-switch")
                     yield Label("Dark mode")
+
+                with Horizontal():
+                    yield Switch(value=False, id="show-context-switch")
+                    yield Label("Show retrieved context with responses")
 
                 yield Static("")  # Spacer
 
@@ -435,6 +447,7 @@ class SettingsScreen(ModalScreen):
             api_base_input = self.query_one("#api-base-input", Input)
             openai_model_input = self.query_one("#openai-model-input", Input)
             anthropic_model_input = self.query_one("#anthropic-model-input", Input)
+            show_context_switch = self.query_one("#show-context-switch", Switch)
 
             # Validate and parse values
             try:
@@ -449,6 +462,7 @@ class SettingsScreen(ModalScreen):
                     "api_base_url": api_base_input.value or "",
                     "openai_model": openai_model_input.value or "gpt-3.5-turbo",
                     "anthropic_model": anthropic_model_input.value or "claude-3-haiku-20240307",
+                    "show_context": show_context_switch.value,
                 }
 
                 # Save settings to file first
@@ -513,6 +527,8 @@ class HelpScreen(ModalScreen):
 - **Ctrl+E**: Export current chat
 - **Ctrl+Shift+E**: Export full chat history
 - **Ctrl+Shift+R**: Restart RAG system (fixes errors)
+- **Ctrl+Shift+C**: Clean cache (fixes retrieval issues)
+- **Ctrl+T**: Toggle context display
 - **F1**: Toggle sidebar
 - **Enter**: Send message
 
@@ -746,12 +762,13 @@ class RAGSystem:
 
     def _initialize_openai(self):
         """Initialize OpenAI LLM"""
-        api_key = self.settings_manager.get("api_key", "")
-        api_base = self.settings_manager.get("api_base_url", "")
+        # Check environment variable first, fall back to settings
+        api_key = os.environ.get("OPENAI_API_KEY") or self.settings_manager.get("api_key", "")
+        api_base = os.environ.get("OPENAI_API_BASE") or self.settings_manager.get("api_base_url", "")
         model = self.settings_manager.get("openai_model", "gpt-3.5-turbo")
 
         if not api_key or not api_key.strip():
-            raise ValueError("OpenAI API key is required but is missing or contains only whitespace")
+            raise ValueError("OpenAI API key is required but is missing or contains only whitespace. Set OPENAI_API_KEY environment variable or provide in settings.")
 
         kwargs = {"model": model, "temperature": self.temperature, "api_key": api_key}
 
@@ -759,22 +776,25 @@ class RAGSystem:
             kwargs["base_url"] = api_base
 
         self.llm = ChatOpenAI(**kwargs)
-        print(f"[green]✓ Initialized OpenAI with model: {model}[/green]")
+        api_source = "environment" if os.environ.get("OPENAI_API_KEY") else "settings"
+        print(f"[green]✓ Initialized OpenAI with model: {model} (API key from {api_source})[/green]")
 
     def _initialize_anthropic(self):
         """Initialize Anthropic LLM"""
-        api_key = self.settings_manager.get("api_key", "")
+        # Check environment variable first, fall back to settings
+        api_key = os.environ.get("ANTHROPIC_API_KEY") or self.settings_manager.get("api_key", "")
         model = self.settings_manager.get("anthropic_model", "claude-3-haiku-20240307")
 
         if not api_key or not api_key.strip():
             raise ValueError(
-                "Anthropic API key is required but not provided in settings or is invalid (whitespace-only)"
+                "Anthropic API key is required but not provided. Set ANTHROPIC_API_KEY environment variable or provide in settings."
             )
 
         self.llm = ChatAnthropic(
             model=model, temperature=self.temperature, api_key=api_key
         )
-        print(f"[green]✓ Initialized Anthropic with model: {model}[/green]")
+        api_source = "environment" if os.environ.get("ANTHROPIC_API_KEY") else "settings"
+        print(f"[green]✓ Initialized Anthropic with model: {model} (API key from {api_source})[/green]")
 
     def _clean_hf_cache_locks(self):
         """Clean up Hugging Face cache lock files that may prevent model loading"""
@@ -785,7 +805,8 @@ class RAGSystem:
         if not cache_dir.exists():
             return
 
-        lock_patterns = ["*.lock", "*.tmp*", "*incomplete*"]
+        # More aggressive patterns to clean
+        lock_patterns = ["*.lock", "*.tmp*", "*incomplete*", "*.part", "*downloading*"]
         cleaned_files = []
 
         try:
@@ -793,16 +814,31 @@ class RAGSystem:
                 for lock_file in cache_dir.rglob(pattern):
                     try:
                         if lock_file.is_file():
-                            # Check if lock file is stale (older than 30 minutes)
-                            if time.time() - lock_file.stat().st_mtime > 1800:
+                            # More aggressive: clean files older than 5 minutes
+                            if time.time() - lock_file.stat().st_mtime > 300:
+                                lock_file.unlink()
+                                cleaned_files.append(str(lock_file))
+                            # Also clean zero-byte files
+                            elif lock_file.stat().st_size == 0:
                                 lock_file.unlink()
                                 cleaned_files.append(str(lock_file))
                     except (OSError, PermissionError):
                         continue
 
+            # Also clean the sentence-transformers specific cache
+            st_cache = cache_dir / "hub" / "models--sentence-transformers--all-MiniLM-L6-v2"
+            if st_cache.exists():
+                # Clean any lock files in the model directory
+                for lock_file in st_cache.rglob("*.lock"):
+                    try:
+                        lock_file.unlink()
+                        cleaned_files.append(str(lock_file))
+                    except:
+                        pass
+
             if cleaned_files:
                 print(
-                    f"[green]✓ Cleaned {len(cleaned_files)} stale cache lock files[/green]"
+                    f"[green]✓ Cleaned {len(cleaned_files)} cache files (locks, temp files, etc.)[/green]"
                 )
 
         except Exception as e:
@@ -823,9 +859,16 @@ class RAGSystem:
             # Force garbage collection before initialization
             gc.collect()
 
+            # Get embedding model from settings or use default
+            embedding_model = "sentence-transformers/all-MiniLM-L6-v2"
+            if self.settings_manager:
+                embedding_model = self.settings_manager.get("embedding_model", embedding_model)
+            
+            print(f"[INFO] Initializing embeddings with model: {embedding_model}")
+
             # Force single-threaded operation to avoid file descriptor issues
             self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_name=embedding_model,
                 model_kwargs={"device": "cpu", "trust_remote_code": False},
                 encode_kwargs={
                     "normalize_embeddings": True,
@@ -893,6 +936,10 @@ class RAGSystem:
         """Load existing ChromaDB with modern configuration"""
         import os
         import gc
+
+        # Clean HF cache before loading to prevent embedding issues
+        print("[blue]ℹ Cleaning HuggingFace cache before loading database...[/blue]")
+        self._clean_hf_cache_locks()
 
         # Set environment variables for ChromaDB (modern approach)
         os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -1222,6 +1269,8 @@ class RAGSystem:
 
     def _setup_qa_chain(self):
         """Setup the QA chain using modern LangChain approach"""
+        print(f"[INFO] Setting up QA chain with retrieval_k={self.retrieval_k}")
+        
         system_prompt = (
             "Use the following pieces of retrieved context to answer the question. "
             "If you don't know the answer, just say that you don't know. "
@@ -1246,7 +1295,7 @@ class RAGSystem:
     async def query(self, question):
         """Query the RAG system with better error handling and async execution"""
         if not self.vectorstore:
-            return "RAG system not initialized. Load or create a database first."
+            return {"response": "RAG system not initialized. Load or create a database first.", "context": []}
 
         try:
             # Run the query in a thread executor to avoid blocking the UI
@@ -1257,6 +1306,7 @@ class RAGSystem:
                 import gc
                 import os
 
+
                 # Set conservative environment for the query thread
                 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -1264,16 +1314,54 @@ class RAGSystem:
                     # Force garbage collection
                     gc.collect()
 
+                    # Check if we have qa_chain first
+                    if self.qa_chain:
+                        # Use the qa_chain which should return both answer and source documents
+                        result = self.qa_chain.invoke({"input": question})
+                        
+                        # Extract answer and source documents
+                        answer_text = result.get("answer", "No answer generated")
+                        
+                        # The qa_chain returns context as a list of documents
+                        source_docs = result.get("context", [])
+                        
+                        # Try to get relevance scores using similarity search
+                        try:
+                            # Get documents with scores for better understanding
+                            docs_with_scores = self.vectorstore.similarity_search_with_score(question, k=self.retrieval_k)
+                            print(f"[INFO] Relevance scores (lower is better):")
+                            for i, (doc, score) in enumerate(docs_with_scores[:3]):
+                                preview = doc.page_content[:100].replace('\n', ' ')
+                                print(f"  Doc {i+1}: score={score:.3f} - {preview}...")
+                        except:
+                            pass
+                        
+                        print(f"[INFO] QA chain retrieved {len(source_docs)} documents (retrieval_k={self.retrieval_k})")
+                        
+                        # Convert response to string if it's an object
+                        if hasattr(answer_text, 'content'):
+                            answer_text = answer_text.content
+                        else:
+                            answer_text = str(answer_text)
+                        
+                        return {"response": answer_text, "context": source_docs}
+                    
+                    # Fallback to manual retrieval if no qa_chain
                     # Get retriever with limited results
                     retriever = self.vectorstore.as_retriever(
                         search_kwargs={"k": self.retrieval_k}
                     )
 
-                    # Get relevant documents - using the simpler method
-                    relevant_docs = retriever.get_relevant_documents(question)
+                    # Get relevant documents - using the newer invoke method
+                    try:
+                        relevant_docs = retriever.invoke(question)
+                    except:
+                        # Fallback to old method if invoke fails
+                        relevant_docs = retriever.get_relevant_documents(question)
+                    
 
                     if not relevant_docs:
-                        return "I couldn't find any relevant information in the documents to answer your question."
+                        return {"response": "I couldn't find any relevant information in the documents to answer your question.", "context": []}
 
                     # Format context
                     context_parts = []
@@ -1293,22 +1381,38 @@ Answer:"""
 
                     # Query LLM with timeout protection
                     response = self.llm.invoke(prompt)
+                    
+                    # Convert response to string if it's an object
+                    if hasattr(response, 'content'):
+                        response_text = response.content
+                    else:
+                        response_text = str(response)
 
                     # Clean up
                     gc.collect()
 
-                    return response
+                    # Return both response and context for display
+                    return {"response": response_text, "context": relevant_docs}
 
                 except Exception as e:
                     # Handle specific errors
                     error_str = str(e)
+                    print(f"[WARNING] Query exception: {error_str[:200]}")
+                    
                     if "fds_to_keep" in error_str:
                         # Try a minimal query without retriever
+                        print("[WARNING] Falling back to simple query without retrieval due to file descriptor error")
                         try:
                             simple_prompt = f"Question: {question}\n\nPlease provide a helpful response based on general knowledge."
-                            return self.llm.invoke(simple_prompt)
+                            response = self.llm.invoke(simple_prompt)
+                            # Convert response to string if it's an object
+                            if hasattr(response, 'content'):
+                                response_text = response.content
+                            else:
+                                response_text = str(response)
+                            return {"response": response_text, "context": []}
                         except Exception:
-                            return "System resource error. Please restart the RAG system (Ctrl+Shift+R)."
+                            return {"response": "System resource error. Please restart the RAG system (Ctrl+Shift+R).", "context": []}
                     else:
                         raise e
 
@@ -1326,60 +1430,60 @@ Answer:"""
 
             # Provide specific guidance for common errors
             if "fds_to_keep" in error_msg or "Bad file descriptor" in error_msg:
-                return (
+                return {"response": (
                     "I encountered a system resource error. Please try:\n"
                     "1. Press Ctrl+Shift+R to restart the RAG system\n"
                     "2. Reduce chunk size in settings (Ctrl+S)\n"
                     "3. Restart the application"
-                )
+                ), "context": []}
             elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
                 # Provider-specific connection error messages
                 if current_provider == "ollama":
-                    return (
+                    return {"response": (
                         "Cannot connect to Ollama. You can:\n"
                         "1. Start Ollama (run 'ollama serve' in terminal)\n"
                         "2. Install the model (run 'ollama pull llama3.2')\n"
                         "3. Or switch to an API provider in Settings (Ctrl+S)"
-                    )
+                    ), "context": []}
                 elif current_provider == "openai":
-                    return (
+                    return {"response": (
                         "Cannot connect to OpenAI API. Please check:\n"
                         "1. Your API key is correct in Settings (Ctrl+S)\n"
                         "2. Your internet connection is working\n"
                         "3. The API endpoint URL is correct (if using custom endpoint)\n"
                         "4. Or switch to Ollama in Settings (Ctrl+S)"
-                    )
+                    ), "context": []}
                 elif current_provider == "anthropic":
-                    return (
+                    return {"response": (
                         "Cannot connect to Anthropic API. Please check:\n"
                         "1. Your API key is correct in Settings (Ctrl+S)\n"
                         "2. Your internet connection is working\n"
                         "3. Or switch to Ollama in Settings (Ctrl+S)"
-                    )
+                    ), "context": []}
                 else:
-                    return (
+                    return {"response": (
                         "Connection error. Please check your network connection and try again.\n"
                         "You can also switch providers in Settings (Ctrl+S)"
-                    )
+                    ), "context": []}
             elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
                 if current_provider in ["openai", "anthropic"]:
-                    return (
+                    return {"response": (
                         f"API authentication error for {current_provider.title()}. Please:\n"
                         "1. Check your API key in Settings (Ctrl+S)\n"
                         "2. Ensure your API key is valid and has sufficient credits\n"
                         "3. Or switch to Ollama in Settings (Ctrl+S)"
-                    )
+                    ), "context": []}
                 else:
-                    return f"Authentication error: {error_msg}"
+                    return {"response": f"Authentication error: {error_msg}", "context": []}
             elif "ollama" in error_msg.lower():
                 # Specific Ollama errors even when using other providers
-                return (
+                return {"response": (
                     "Ollama-related error detected. You can:\n"
                     "1. Switch to an API provider in Settings (Ctrl+S)\n"
                     "2. Or fix Ollama: start service and install models"
-                )
+                ), "context": []}
             else:
-                return f"Error: {error_msg}"
+                return {"response": f"Error: {error_msg}", "context": []}
 
     def get_stats(self):
         """Get database statistics"""
@@ -1639,6 +1743,8 @@ class RAGChatApp(App):
         Binding("ctrl+y", "copy_last_message", "Copy Last"),
         Binding("ctrl+shift+e", "export_full_chat", "Export Full"),
         Binding("ctrl+shift+r", "restart_rag", "Restart RAG"),
+        Binding("ctrl+t", "toggle_context", "Toggle Context"),
+        Binding("ctrl+shift+c", "clean_cache", "Clean Cache"),
     ]
 
     show_sidebar = reactive(True)
@@ -1982,13 +2088,48 @@ class RAGChatApp(App):
             chat.write("[dim]🧠 Processing your question...[/dim]")
 
             start_time = time.time()
-            answer = await self.rag.query(question)
+            result = await self.rag.query(question)
             response_time = time.time() - start_time
+
+            # Extract response and context from result
+            if isinstance(result, dict):
+                answer = result.get("response", "No response")
+                context_docs = result.get("context", [])
+            else:
+                # Backward compatibility if something returns a string
+                answer = str(result)
+                context_docs = []
 
             # Clear the thinking indicator
             # Note: RichLog doesn't support removing specific messages, so we'll just add the response
 
-            # Remove thinking indicator and add answer
+            # Check if we should show context
+            show_context = self.settings_manager.get("show_context", False)
+            
+            # Display context if enabled and available
+            if show_context and context_docs:
+                try:
+                    context_content = []
+                    for i, doc in enumerate(context_docs):
+                        doc_content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+                        # Truncate long content for display
+                        if len(doc_content) > 500:
+                            doc_content = doc_content[:500] + "..."
+                        context_content.append(f"[bold]Document {i+1}:[/bold]\n{doc_content}")
+                    
+                    if context_content:
+                        context_text = "\n\n".join(context_content)
+                        context_panel = Panel(
+                            context_text,
+                            title=f"📚 Retrieved Context ({len(context_docs)} documents)",
+                            border_style="cyan",
+                            padding=(1, 1),
+                        )
+                        chat.write(context_panel)
+                except Exception as e:
+                    chat.write(f"[red]Error displaying context: {str(e)}[/red]")
+
+            # Display the answer
             assistant_panel = Panel(
                 answer,
                 title=f"🤖 Assistant [{response_time:.1f}s]",
@@ -2060,6 +2201,33 @@ class RAGChatApp(App):
     def action_toggle_sidebar(self) -> None:
         """Toggle sidebar visibility."""
         self.show_sidebar = not self.show_sidebar
+
+    def action_toggle_context(self) -> None:
+        """Toggle context display setting."""
+        current_value = self.settings_manager.get("show_context", False)
+        new_value = not current_value
+        self.settings_manager.save_settings({"show_context": new_value})
+        
+        chat = self.query_one("#chat", RichLog)
+        status = "enabled" if new_value else "disabled"
+        chat.write(f"[blue]ℹ Context display {status}[/blue]")
+
+    def action_clean_cache(self) -> None:
+        """Clean HuggingFace cache to fix embedding issues."""
+        chat = self.query_one("#chat", RichLog)
+        chat.write("[yellow]🧹 Cleaning HuggingFace cache...[/yellow]")
+        
+        try:
+            # Clean the cache
+            self.rag._clean_hf_cache_locks()
+            
+            # Force garbage collection
+            import gc
+            gc.collect()
+            
+            chat.write("[green]✅ Cache cleaned successfully! You may want to reload the database (Ctrl+R).[/green]")
+        except Exception as e:
+            chat.write(f"[red]❌ Failed to clean cache: {str(e)}[/red]")
 
     def action_new_session(self) -> None:
         """Start a new chat session."""
