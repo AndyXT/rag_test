@@ -116,27 +116,52 @@ from langchain_ollama import OllamaLLM
 
 ## Common Issues and Fixes
 
-### Embedding Model Errors
-If you encounter errors during ChromaDB database creation related to embeddings:
+### Embedding Model Errors & Intermittent Context Retrieval
+If you experience intermittent issues where context retrieval works sometimes but not others:
 
-**🚀 New Improved Solutions (No cache deletion needed!):**
+**🚀 Quick Fixes:**
 
-1. **Use the built-in cache cleanup**: The system now automatically cleans stale lock files during initialization
-2. **Run the cache manager utility**: `python hf_cache_manager.py --clean-locks --validate`
-3. **Manual lock cleanup only**: `find ~/.cache/huggingface -name "*.lock" -mmin +30 -delete`
-4. **Check cache permissions**: `python hf_cache_manager.py --fix-permissions`
+1. **Press Ctrl+Shift+C in the app**: Cleans cache without restarting
+2. **Run the cache manager**: `python hf_cache_manager.py --clean-locks`
+3. **Restart with Ctrl+Shift+R**: Restarts the RAG system completely
+
+**🛠️ Cache Manager Commands:**
+```bash
+# Check cache status
+python hf_cache_manager.py --info
+
+# Clean lock files
+python hf_cache_manager.py --clean-locks
+
+# Validate cache integrity
+python hf_cache_manager.py --validate
+
+# Fix permissions
+python hf_cache_manager.py --fix-permissions
+
+# Nuclear option: clear specific model
+python hf_cache_manager.py --clear-model sentence-transformers/all-MiniLM-L6-v2
+```
 
 **💡 What causes the issue:**
+- HuggingFace cache corruption (most common)
 - Stale lock files from interrupted model downloads
 - Multiple processes accessing the same model cache simultaneously
 - Corrupted partial downloads in cache
 - File permission issues in cache directory
 
 **🛡️ Prevention (automatically handled now):**
+- Automatic cache cleaning on database load
+- More aggressive lock file cleanup (5 minutes instead of 30)
+- Zero-byte file removal
 - Environment variables set to prevent tokenizer conflicts
-- Automatic cleanup of stale lock files on startup
-- Better cache directory management and validation
 - Single-threaded embedding initialization
+
+**📝 How to tell if this is your issue:**
+- Context display shows 0 documents even though database is loaded
+- Works after deleting ~/.cache/huggingface
+- Terminal shows "[WARNING] Falling back to simple query without retrieval"
+- Intermittent behavior - works sometimes, fails others
 
 **🛡️ Database Safety Features:**
 - Automatic backup creation before database recreation
