@@ -81,6 +81,14 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
+# Reranking support
+try:
+    from sentence_transformers import CrossEncoder
+    CROSSENCODER_AVAILABLE = True
+except ImportError:
+    CrossEncoder = None
+    CROSSENCODER_AVAILABLE = False
+
 
 class SettingsManager:
     """Manages application settings with persistence"""
@@ -98,6 +106,12 @@ class SettingsManager:
             "auto_save": True,
             "dark_mode": False,
             "show_context": False,  # Toggle for showing retrieved context
+            "use_reranker": False,  # Toggle for reranking
+            "reranker_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",  # Reranker model (smaller, more accessible)
+            "reranker_top_k": 3,  # Number of documents to keep after reranking
+            "use_query_expansion": False,  # Toggle for query expansion
+            "query_expansion_model": "llama3.2:3b",  # Small fast model for query expansion
+            "expansion_queries": 3,  # Number of expanded queries to generate
             "llm_provider": "ollama",  # 'ollama', 'openai', 'anthropic'
             "api_key": "",  # For API providers
             "api_base_url": "",  # For custom API endpoints
@@ -256,6 +270,24 @@ class SettingsScreen(ModalScreen):
         self.query_one("#anthropic-model-input", Input).value = str(
             settings.get("anthropic_model", "claude-3-haiku-20240307")
         )
+        
+        # Update reranker settings
+        self.query_one("#use-reranker-switch", Switch).value = settings.get("use_reranker", False)
+        self.query_one("#reranker-model-input", Input).value = str(
+            settings.get("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+        )
+        self.query_one("#reranker-top-k-input", Input).value = str(
+            settings.get("reranker_top_k", 3)
+        )
+        
+        # Update query expansion settings
+        self.query_one("#use-query-expansion-switch", Switch).value = settings.get("use_query_expansion", False)
+        self.query_one("#query-expansion-model-input", Input).value = str(
+            settings.get("query_expansion_model", "llama3.2:3b")
+        )
+        self.query_one("#expansion-queries-input", Input).value = str(
+            settings.get("expansion_queries", 3)
+        )
 
         # Update provider-specific field visibility
         self._update_provider_fields(settings.get("llm_provider", "ollama"))
@@ -369,6 +401,52 @@ class SettingsScreen(ModalScreen):
                     yield Label("Show retrieved context with responses")
 
                 yield Static("")  # Spacer
+                yield Label("🔍 Reranking Settings", classes="section-header")
+                
+                with Horizontal():
+                    yield Switch(value=False, id="use-reranker-switch")
+                    yield Label("Use reranking to improve retrieval quality")
+
+                yield Label("Reranker Model:", classes="reranker-field")
+                yield Input(
+                    value="cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    placeholder="Reranker model name",
+                    id="reranker-model-input",
+                    classes="reranker-field",
+                )
+
+                yield Label("Reranker Top K:", classes="reranker-field")
+                yield Input(
+                    value="3",
+                    placeholder="Number of documents after reranking",
+                    id="reranker-top-k-input",
+                    classes="reranker-field",
+                )
+
+                yield Static("")  # Spacer
+                yield Label("🔄 Query Expansion Settings", classes="section-header")
+                
+                with Horizontal():
+                    yield Switch(value=False, id="use-query-expansion-switch")
+                    yield Label("Use query expansion to improve retrieval")
+
+                yield Label("Query Expansion Model:", classes="query-expansion-field")
+                yield Input(
+                    value="llama3.2:3b",
+                    placeholder="Small model for query expansion",
+                    id="query-expansion-model-input",
+                    classes="query-expansion-field",
+                )
+
+                yield Label("Number of Expanded Queries:", classes="query-expansion-field")
+                yield Input(
+                    value="3",
+                    placeholder="How many query variations to generate",
+                    id="expansion-queries-input",
+                    classes="query-expansion-field",
+                )
+
+                yield Static("")  # Spacer
 
                 with Horizontal(classes="button-row"):
                     yield Button("Save", variant="primary", id="save-settings")
@@ -448,6 +526,12 @@ class SettingsScreen(ModalScreen):
             openai_model_input = self.query_one("#openai-model-input", Input)
             anthropic_model_input = self.query_one("#anthropic-model-input", Input)
             show_context_switch = self.query_one("#show-context-switch", Switch)
+            use_reranker_switch = self.query_one("#use-reranker-switch", Switch)
+            reranker_model_input = self.query_one("#reranker-model-input", Input)
+            reranker_top_k_input = self.query_one("#reranker-top-k-input", Input)
+            use_query_expansion_switch = self.query_one("#use-query-expansion-switch", Switch)
+            query_expansion_model_input = self.query_one("#query-expansion-model-input", Input)
+            expansion_queries_input = self.query_one("#expansion-queries-input", Input)
 
             # Validate and parse values
             try:
@@ -463,6 +547,12 @@ class SettingsScreen(ModalScreen):
                     "openai_model": openai_model_input.value or "gpt-3.5-turbo",
                     "anthropic_model": anthropic_model_input.value or "claude-3-haiku-20240307",
                     "show_context": show_context_switch.value,
+                    "use_reranker": use_reranker_switch.value,
+                    "reranker_model": reranker_model_input.value or "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    "reranker_top_k": int(reranker_top_k_input.value or "3"),
+                    "use_query_expansion": use_query_expansion_switch.value,
+                    "query_expansion_model": query_expansion_model_input.value or "llama3.2:3b",
+                    "expansion_queries": int(expansion_queries_input.value or "3"),
                 }
 
                 # Save settings to file first
@@ -664,6 +754,8 @@ class RAGSystem:
         self.vectorstore = None
         self.qa_chain = None
         self.conversation_history = []
+        self.reranker = None
+        self.query_expansion_llm = None
 
         # Check and increase file descriptor limit before initialization
         self._check_and_increase_fd_limit()
@@ -673,6 +765,12 @@ class RAGSystem:
 
         # Initialize embeddings with better error handling
         self._initialize_embeddings_safely()
+        
+        # Initialize reranker if enabled
+        self._initialize_reranker()
+        
+        # Initialize query expansion LLM if enabled
+        self._initialize_query_expansion_llm()
 
     def _check_and_increase_fd_limit(self):
         """Check and try to increase file descriptor limit"""
@@ -751,8 +849,17 @@ class RAGSystem:
                 temperature=self.temperature,
                 num_ctx=2048,  # Reduce context window to save memory
                 num_thread=1,  # Use single thread to avoid fd issues
+                keep_alive="5m",  # Keep model loaded for only 5 minutes to free memory faster
             )
             print(f"[green]✓ Initialized Ollama with model: {ollama_model}[/green]")
+            
+            # Check if this is a large model that might conflict with query expansion
+            large_models = ["qwen2.5-coder:32b", "mixtral:8x7b", "llama3.1:70b", "qwen2.5:32b"]
+            if any(ollama_model.startswith(m) for m in large_models):
+                print(f"[yellow]⚠ Large model detected ({ollama_model}). Query expansion may cause memory issues.[/yellow]")
+                if self.settings_manager and self.settings_manager.get("use_query_expansion", False):
+                    print("[yellow]⚠ Consider disabling query expansion for better performance.[/yellow]")
+                    
         except Exception:
             # Fallback to simpler initialization
             self.llm = OllamaLLM(model=ollama_model, temperature=self.temperature)
@@ -872,7 +979,7 @@ class RAGSystem:
                 model_kwargs={"device": "cpu", "trust_remote_code": False},
                 encode_kwargs={
                     "normalize_embeddings": True,
-                    "batch_size": 1,  # Process one at a time to avoid memory/fd issues
+                    "batch_size": 32,  # Increased for better performance
                     "convert_to_numpy": True,
                 },
             )
@@ -919,6 +1026,168 @@ class RAGSystem:
                     f"Failed to initialize embeddings: {str(retry_error)}"
                 ) from retry_error
 
+    def _initialize_reranker(self):
+        """Initialize reranker model if enabled"""
+        if not self.settings_manager:
+            return
+            
+        use_reranker = self.settings_manager.get("use_reranker", False)
+        if not use_reranker:
+            return
+            
+        if not CROSSENCODER_AVAILABLE:
+            print("[yellow]⚠ CrossEncoder not available. Install sentence-transformers to use reranking.[/yellow]")
+            return
+            
+        reranker_model = self.settings_manager.get("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
+        
+        try:
+            print(f"[blue]ℹ Initializing reranker model: {reranker_model}[/blue]")
+            self.reranker = CrossEncoder(
+                reranker_model,
+                max_length=512,
+                device="cpu",  # Force CPU to avoid GPU memory issues
+                trust_remote_code=True  # Required for Qwen models
+            )
+            print("[green]✓ Reranker initialized successfully[/green]")
+        except Exception as e:
+            print(f"[red]✗ Failed to initialize reranker: {str(e)}[/red]")
+            print("[yellow]⚠ Continuing without reranking[/yellow]")
+            self.reranker = None
+
+    def _rerank_documents(self, query, documents):
+        """Rerank documents using the cross-encoder model"""
+        if not self.reranker or not documents:
+            return documents
+            
+        try:
+            import asyncio
+            # Get reranker settings
+            reranker_top_k = self.settings_manager.get("reranker_top_k", 3) if self.settings_manager else 3
+            
+            # Prepare query-document pairs
+            pairs = [[query, doc.page_content] for doc in documents]
+            
+            # Get reranking scores with timeout
+            print(f"[blue]ℹ Reranking {len(documents)} documents...[/blue]")
+            
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                future = loop.run_in_executor(None, self.reranker.predict, pairs)
+                scores = loop.run_until_complete(asyncio.wait_for(future, timeout=15.0))
+            except asyncio.TimeoutError:
+                print(f"[red]✗ Reranking timed out after 15 seconds[/red]")
+                return documents[:reranker_top_k]  # Return top k without reranking
+            finally:
+                loop.close()
+            
+            # Sort documents by score (higher is better for cross-encoder)
+            doc_scores = list(zip(documents, scores))
+            doc_scores.sort(key=lambda x: x[1], reverse=True)
+            
+            # Take top k documents
+            reranked_docs = [doc for doc, score in doc_scores[:reranker_top_k]]
+            
+            # Print reranking results
+            print(f"[green]✓ Reranked to top {len(reranked_docs)} documents[/green]")
+            for i, (doc, score) in enumerate(doc_scores[:reranker_top_k]):
+                preview = doc.page_content[:80].replace('\n', ' ')
+                print(f"  Rank {i+1}: score={score:.3f} - {preview}...")
+            
+            return reranked_docs
+            
+        except Exception as e:
+            print(f"[red]✗ Reranking failed: {str(e)}[/red]")
+            print("[yellow]⚠ Using original document order[/yellow]")
+            return documents
+
+    def _initialize_query_expansion_llm(self):
+        """Initialize query expansion LLM if enabled"""
+        if not self.settings_manager:
+            return
+            
+        use_query_expansion = self.settings_manager.get("use_query_expansion", False)
+        if not use_query_expansion:
+            return
+            
+        # Check if main model is large - if so, skip query expansion
+        main_model = self.settings_manager.get("ollama_model", "llama3.2:3b")
+        large_models = ["qwen2.5-coder:32b", "mixtral:8x7b", "llama3.1:70b", "qwen2.5:32b", "deepseek-coder:33b"]
+        if any(main_model.startswith(m) for m in large_models):
+            print(f"[yellow]⚠ Large main model detected ({main_model}). Skipping query expansion to prevent memory issues.[/yellow]")
+            print("[yellow]ℹ To use query expansion, switch to a smaller main model (e.g., qwen2.5-coder:7b)[/yellow]")
+            self.query_expansion_llm = None
+            return
+            
+        query_expansion_model = self.settings_manager.get("query_expansion_model", "llama3.2:3b")
+        
+        try:
+            print(f"[blue]ℹ Initializing query expansion LLM: {query_expansion_model}[/blue]")
+            # Use OllamaLLM for query expansion with memory-efficient settings
+            self.query_expansion_llm = OllamaLLM(
+                model=query_expansion_model,
+                temperature=0.3,  # Low temperature for consistent expansions
+                num_ctx=512,  # Small context window for query expansion
+                keep_alive="1m",  # Unload quickly after use
+            )
+            print("[green]✓ Query expansion LLM initialized successfully[/green]")
+        except Exception as e:
+            print(f"[red]✗ Failed to initialize query expansion LLM: {str(e)}[/red]")
+            print("[yellow]⚠ Continuing without query expansion[/yellow]")
+            self.query_expansion_llm = None
+
+    def _expand_query(self, original_query):
+        """Expand a query using the small LLM to improve retrieval"""
+        if not self.query_expansion_llm:
+            return [original_query]
+            
+        try:
+            import asyncio
+            expansion_count = self.settings_manager.get("expansion_queries", 3) if self.settings_manager else 3
+            
+            # Create prompt for query expansion
+            expansion_prompt = f"""Given this question about Rust programming: "{original_query}"
+
+Generate {expansion_count} alternative phrasings or expanded versions that would help find relevant information. Include:
+1. A rephrased version using different terminology
+2. A version with added context or related terms
+3. A more specific or technical version
+
+Format each query on a new line. Only output the queries, no explanations.
+
+Queries:"""
+            
+            print(f"[blue]ℹ Expanding query: {original_query}[/blue]")
+            
+            # Get expanded queries with timeout protection
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                future = loop.run_in_executor(None, self.query_expansion_llm.invoke, expansion_prompt)
+                response = loop.run_until_complete(asyncio.wait_for(future, timeout=10.0))
+            except asyncio.TimeoutError:
+                print(f"[red]✗ Query expansion timed out after 10 seconds[/red]")
+                return [original_query]
+            finally:
+                loop.close()
+            
+            # Parse response into individual queries
+            expanded_queries = [q.strip() for q in response.split('\n') if q.strip()]
+            
+            # Always include original query
+            all_queries = [original_query] + expanded_queries[:expansion_count]
+            
+            print(f"[green]✓ Generated {len(all_queries)} query variations[/green]")
+            for i, q in enumerate(all_queries):
+                print(f"  Query {i+1}: {q[:80]}...")
+            
+            return all_queries
+            
+        except Exception as e:
+            print(f"[red]✗ Query expansion failed: {str(e)}[/red]")
+            return [original_query]
+
     def update_settings(self, **kwargs):
         """Update RAG system settings"""
         for key, value in kwargs.items():
@@ -927,6 +1196,12 @@ class RAGSystem:
 
         # Recreate LLM with new settings
         self._initialize_llm()
+        
+        # Reinitialize reranker if settings changed
+        self._initialize_reranker()
+        
+        # Reinitialize query expansion if settings changed
+        self._initialize_query_expansion_llm()
 
         # Recreate QA chain if vectorstore exists
         if self.vectorstore:
@@ -1123,8 +1398,8 @@ class RAGSystem:
 
             # Create ChromaDB with modern configuration
             # Use smaller batches and add delays to avoid file descriptor exhaustion
-            batch_size = 25  # Reduced batch size for better stability
-            delay_between_batches = 0.1  # Small delay to allow cleanup
+            batch_size = 100  # Increased for better performance with Qwen models
+            delay_between_batches = 0.05  # Reduced delay
 
             vectorstore = None
             total_batches = (len(texts) + batch_size - 1) // batch_size
@@ -1267,16 +1542,105 @@ class RAGSystem:
         except Exception as e:
             print(f"[yellow]⚠ Error during backup cleanup: {e}[/yellow]")
 
+    def _create_expanded_retriever(self, k):
+        """Create a retriever that uses query expansion if enabled"""
+        base_retriever = self.vectorstore.as_retriever(search_kwargs={"k": k})
+        
+        if not self.query_expansion_llm:
+            return base_retriever
+            
+        # Create a custom retriever that expands queries
+        from langchain_core.retrievers import BaseRetriever
+        from langchain_core.documents import Document
+        from typing import List, Any
+        
+        class ExpandedRetriever(BaseRetriever):
+            rag_system: Any = None
+            base_retriever: Any = None
+            k: int = 10
+            
+            def __init__(self, rag_system, base_retriever, k, **kwargs):
+                super().__init__(**kwargs)
+                self.rag_system = rag_system
+                self.base_retriever = base_retriever
+                self.k = k
+                
+            def _get_relevant_documents(self, query: str) -> List[Document]:
+                # Expand the query
+                expanded_queries = self.rag_system._expand_query(query)
+                
+                # Retrieve documents for each query
+                all_docs = []
+                doc_contents_seen = set()
+                max_docs_per_query = 10  # Limit docs per query
+                max_total_docs = 30  # Hard limit on total docs
+                
+                for expanded_query in expanded_queries:
+                    if len(all_docs) >= max_total_docs:
+                        print(f"[yellow]⚠ Reached maximum document limit ({max_total_docs}), stopping retrieval[/yellow]")
+                        break
+                        
+                    try:
+                        docs = self.base_retriever.get_relevant_documents(expanded_query)
+                        added_count = 0
+                        for doc in docs[:max_docs_per_query]:  # Limit per query
+                            # Deduplicate by content
+                            content_hash = hash(doc.page_content)
+                            if content_hash not in doc_contents_seen:
+                                doc_contents_seen.add(content_hash)
+                                all_docs.append(doc)
+                                added_count += 1
+                                if len(all_docs) >= max_total_docs:
+                                    break
+                        print(f"[blue]ℹ Query '{expanded_query[:50]}...' added {added_count} new documents[/blue]")
+                    except Exception as e:
+                        print(f"[yellow]⚠ Failed to retrieve for query: {expanded_query[:50]}... - {str(e)}[/yellow]")
+                
+                print(f"[INFO] Query expansion retrieved {len(all_docs)} unique documents from {len(expanded_queries)} queries")
+                
+                # Return requested number of documents
+                return all_docs[:self.k]
+            
+            async def _aget_relevant_documents(self, query: str) -> List[Document]:
+                # For async, just call sync version
+                return self._get_relevant_documents(query)
+        
+        return ExpandedRetriever(self, base_retriever, k)
+    
     def _setup_qa_chain(self):
         """Setup the QA chain using modern LangChain approach"""
         print(f"[INFO] Setting up QA chain with retrieval_k={self.retrieval_k}")
         
-        system_prompt = (
-            "Use the following pieces of retrieved context to answer the question. "
-            "If you don't know the answer, just say that you don't know. "
-            "Use three sentences maximum and keep the answer concise.\n\n"
-            "{context}"
-        )
+        # Load system prompt from file if available
+        system_prompt_file = Path("system_prompt.md")
+        if system_prompt_file.exists():
+            try:
+                with open(system_prompt_file, 'r', encoding='utf-8') as f:
+                    system_prompt_content = f.read()
+                # Extract just the content before {context} placeholder
+                if "{context}" in system_prompt_content:
+                    system_prompt = system_prompt_content
+                else:
+                    # Add context placeholder if not present
+                    system_prompt = system_prompt_content + "\n\nContext:\n{context}"
+                print("[green]✓ Loaded custom system prompt from system_prompt.md[/green]")
+            except Exception as e:
+                print(f"[yellow]⚠ Failed to load system_prompt.md: {str(e)}[/yellow]")
+                # Fallback to default prompt
+                system_prompt = (
+                    "You are a helpful assistant. Use the following pieces of retrieved context to answer the question. "
+                    "Provide a comprehensive answer that fully addresses the question. "
+                    "If you don't know the answer based on the context, say so.\n\n"
+                    "{context}"
+                )
+        else:
+            # Default prompt without length restrictions
+            system_prompt = (
+                "You are a helpful assistant. Use the following pieces of retrieved context to answer the question. "
+                "Provide a comprehensive answer that fully addresses the question. "
+                "If you don't know the answer based on the context, say so.\n\n"
+                "{context}"
+            )
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -1287,8 +1651,11 @@ class RAGSystem:
 
         question_answer_chain = create_stuff_documents_chain(self.llm, prompt)
 
+        # Use expanded retriever if query expansion is enabled
+        retriever = self._create_expanded_retriever(self.retrieval_k)
+        
         self.qa_chain = create_retrieval_chain(
-            self.vectorstore.as_retriever(search_kwargs={"k": self.retrieval_k}),
+            retriever,
             question_answer_chain,
         )
 
@@ -1325,6 +1692,10 @@ class RAGSystem:
                         # The qa_chain returns context as a list of documents
                         source_docs = result.get("context", [])
                         
+                        # Apply reranking if enabled
+                        if self.reranker and source_docs:
+                            source_docs = self._rerank_documents(question, source_docs)
+                        
                         # Try to get relevance scores using similarity search
                         try:
                             # Get documents with scores for better understanding
@@ -1333,8 +1704,8 @@ class RAGSystem:
                             for i, (doc, score) in enumerate(docs_with_scores[:3]):
                                 preview = doc.page_content[:100].replace('\n', ' ')
                                 print(f"  Doc {i+1}: score={score:.3f} - {preview}...")
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"[yellow]⚠ Could not get relevance scores: {str(e)}[/yellow]")
                         
                         print(f"[INFO] QA chain retrieved {len(source_docs)} documents (retrieval_k={self.retrieval_k})")
                         
@@ -1347,30 +1718,55 @@ class RAGSystem:
                         return {"response": answer_text, "context": source_docs}
                     
                     # Fallback to manual retrieval if no qa_chain
-                    # Get retriever with limited results
-                    retriever = self.vectorstore.as_retriever(
-                        search_kwargs={"k": self.retrieval_k}
-                    )
+                    # Use expanded retriever if query expansion is enabled
+                    retriever = self._create_expanded_retriever(self.retrieval_k)
 
                     # Get relevant documents - using the newer invoke method
                     try:
                         relevant_docs = retriever.invoke(question)
-                    except:
+                    except Exception as e:
                         # Fallback to old method if invoke fails
+                        print(f"[yellow]⚠ Retriever invoke failed, using fallback: {str(e)}[/yellow]")
                         relevant_docs = retriever.get_relevant_documents(question)
                     
 
                     if not relevant_docs:
                         return {"response": "I couldn't find any relevant information in the documents to answer your question.", "context": []}
+                    
+                    # Apply reranking if enabled
+                    if self.reranker and relevant_docs:
+                        relevant_docs = self._rerank_documents(question, relevant_docs)
 
                     # Format context
                     context_parts = []
-                    for i, doc in enumerate(relevant_docs[: self.retrieval_k]):
+                    # Use all documents after reranking (reranker already limits to reranker_top_k)
+                    for i, doc in enumerate(relevant_docs):
                         context_parts.append(f"Document {i+1}:\n{doc.page_content}")
                     context = "\n\n".join(context_parts)
 
-                    # Create prompt
-                    prompt = f"""Based on the following context, please answer the question. If the answer is not in the context, say so.
+                    # Create prompt - load from system_prompt.md if available
+                    system_prompt_file = Path("system_prompt.md")
+                    if system_prompt_file.exists():
+                        try:
+                            with open(system_prompt_file, 'r', encoding='utf-8') as f:
+                                system_prompt_template = f.read()
+                            # Replace context placeholder
+                            system_prompt_with_context = system_prompt_template.replace("{context}", context)
+                            prompt = f"{system_prompt_with_context}\n\nQuestion: {question}\n\nAnswer:"
+                        except Exception as e:
+                            # Fallback prompt
+                            print(f"[yellow]⚠ Could not load system prompt: {str(e)}[/yellow]")
+                            prompt = f"""You are a helpful assistant. Based on the following context, please provide a comprehensive answer to the question. If the answer is not in the context, say so.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+                    else:
+                        # Default fallback prompt without length restrictions
+                        prompt = f"""You are a helpful assistant. Based on the following context, please provide a comprehensive answer to the question. If the answer is not in the context, say so.
 
 Context:
 {context}
@@ -2088,7 +2484,16 @@ class RAGChatApp(App):
             chat.write("[dim]🧠 Processing your question...[/dim]")
 
             start_time = time.time()
-            result = await self.rag.query(question)
+            
+            # Add timeout to prevent infinite hanging
+            try:
+                result = await asyncio.wait_for(self.rag.query(question), timeout=60.0)
+            except asyncio.TimeoutError:
+                chat.write("[red]✗ Query timed out after 60 seconds. Try disabling query expansion or reranking in settings.[/red]")
+                self.processing = False
+                self.update_progress("", 0)
+                return
+            
             response_time = time.time() - start_time
 
             # Extract response and context from result
@@ -2161,9 +2566,11 @@ class RAGChatApp(App):
             )
             chat.write(error_panel)
             self.update_progress(f"❌ Error: {str(e)}")
-
-        await asyncio.sleep(1)
-        self.processing = False
+        finally:
+            # Always reset processing state
+            await asyncio.sleep(1)
+            self.processing = False
+            self.update_progress("", 0)
 
     def action_clear_chat(self) -> None:
         """Clear the chat log."""
