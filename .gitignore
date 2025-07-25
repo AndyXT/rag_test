@@ -169,3 +169,12 @@ documents/.DS_Store
 settings.json
 *.db
 *.sqlite
+__pycache__/rag_cli.cpython-313.pyc
+rag_cli/__pycache__/main.cpython-313.pyc
+rag_cli/core/__pycache__/__init__.cpython-313.pyc
+rag_cli/core/__pycache__/chat_history.cpython-313.pyc
+rag_cli/core/__pycache__/rag_system.cpython-313.pyc
+rag_cli/core/__pycache__/settings_manager.cpython-313.pyc
+rag_cli/ui/__pycache__/app.cpython-313.pyc
+rag_cli/ui/screens/__pycache__/settings_screen.cpython-313.pyc
+rag_cli/utils/__pycache__/__init__.cpython-313.pyc
