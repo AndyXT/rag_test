@@ -23,7 +23,7 @@ class ChatHistory:
         """Load chat history from file"""
         try:
             if os.path.exists(self.history_file):
-                with open(self.history_file, "r") as f:
+                with open(self.history_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.sessions = data.get("sessions", [])
         except (
@@ -43,7 +43,7 @@ class ChatHistory:
     def save_history(self) -> None:
         """Save chat history to file"""
         try:
-            with open(self.history_file, "w") as f:
+            with open(self.history_file, "w", encoding="utf-8") as f:
                 json.dump({"sessions": self.sessions}, f, indent=2)
         except (IOError, OSError, PermissionError, TypeError) as e:
             RichLogger.warning(

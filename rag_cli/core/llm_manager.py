@@ -1,4 +1,10 @@
-# LLM Manager Module
+"""LLM Manager Module.
+
+This module manages Large Language Model (LLM) interactions for the RAG application.
+It supports multiple LLM providers including Ollama (local), OpenAI, and Anthropic,
+handles model initialization, query expansion, and provides a unified interface for
+LLM operations.
+"""
 import os
 from typing import Optional, List
 
@@ -129,7 +135,8 @@ class LLMManager:
 
         if not api_key or not api_key.strip():
             raise ValueError(
-                "OpenAI API key is required but is missing or contains only whitespace. Set OPENAI_API_KEY environment variable or provide in settings."
+                "OpenAI API key is required but is missing or contains only whitespace. "
+                "Set OPENAI_API_KEY environment variable or provide in settings."
             )
 
         kwargs = {"model": model, "temperature": self.temperature, "api_key": api_key}
@@ -153,7 +160,8 @@ class LLMManager:
 
         if not api_key or not api_key.strip():
             raise ValueError(
-                "Anthropic API key is required but not provided. Set ANTHROPIC_API_KEY environment variable or provide in settings."
+                "Anthropic API key is required but not provided. "
+                "Set ANTHROPIC_API_KEY environment variable or provide in settings."
             )
 
         self.llm = ChatAnthropic(
@@ -220,7 +228,8 @@ class LLMManager:
             # Create prompt for query expansion
             expansion_prompt = f"""Given this question about Rust programming: "{original_query}"
 
-Generate {expansion_count} alternative phrasings or expanded versions that would help find relevant information. Include:
+Generate {expansion_count} alternative phrasings or expanded versions that would help find relevant 
+information. Include:
 1. A rephrased version using different terminology
 2. A version with added context or related terms
 3. A more specific or technical version

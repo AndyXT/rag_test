@@ -1,4 +1,9 @@
-# RAG Chat Application UI
+"""RAG Chat Application UI.
+
+This module provides the main Textual-based Terminal User Interface (TUI) for the RAG
+(Retrieval-Augmented Generation) chat application. It handles user interactions, displays
+chat messages, manages settings, and coordinates with the underlying RAG services.
+"""
 import asyncio
 import json
 import time
@@ -326,7 +331,8 @@ class RAGChatApp(App):
             self.update_stats()
         else:
             chat.write(
-                "[yellow]💡 No existing database found. Create one from documents or load an existing one.[/yellow]"
+                "[yellow]💡 No existing database found. "
+                "Create one from documents or load an existing one.[/yellow]"
             )
 
     def update_stats(self):
@@ -436,7 +442,7 @@ class RAGChatApp(App):
 
             # Show estimated processing time
             _, time_str = DocumentService.estimate_processing_time(pdf_files)
-            self.add_message("info", f"Estimated processing time: {time_str}")
+            chat.write(f"[blue]ℹ️ Estimated processing time: {time_str}[/blue]")
 
             # Check disk space
             has_space, space_msg = DocumentService.check_disk_space("./chroma_db")
@@ -444,7 +450,10 @@ class RAGChatApp(App):
                 raise ValueError(space_msg)
 
             await self._create_database_with_progress(pdf_files, chat)
+        except (ValueError, OSError, IOError) as e:
+            await self._handle_database_creation_error(e, chat)
         except Exception as e:
+            # Catch any other unexpected exceptions to prevent UI crash
             await self._handle_database_creation_error(e, chat)
         finally:
             await asyncio.sleep(1.5)
@@ -532,10 +541,12 @@ class RAGChatApp(App):
             "[red]❌ Database creation failed: All document batches failed to process[/red]"
         )
         chat.write(
-            "[yellow]💡 This may be due to embedding model issues or document format problems.[/yellow]"
+            "[yellow]💡 This may be due to embedding model issues "
+            "or document format problems.[/yellow]"
         )
         chat.write(
-            "[yellow]💡 Try restarting the application or check the terminal for detailed errors.[/yellow]"
+            "[yellow]💡 Try restarting the application or check "
+            "the terminal for detailed errors.[/yellow]"
         )
 
     def _handle_file_descriptor_error(self, chat):
@@ -595,10 +606,11 @@ class RAGChatApp(App):
                 self.rag_service.query_service.process_query(question), timeout=60.0
             )
             return result
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             raise Exception(
-                "Query timed out after 60 seconds. Try disabling query expansion or reranking in settings."
-            )
+                "Query timed out after 60 seconds. "
+                "Try disabling query expansion or reranking in settings."
+            ) from exc
 
     def _display_context(self, context_docs: list, chat) -> None:
         """Display context documents if enabled."""
@@ -768,7 +780,10 @@ class RAGChatApp(App):
 
         try:
             # Clean the cache
-            self.rag_service.database_service.cache_manager.clean_hf_cache_locks()
+            # Import cache manager directly
+            from rag_cli.core.cache_manager import CacheManager
+            cache_manager = CacheManager()
+            cache_manager.clean_hf_cache_locks()
 
             # Force garbage collection
             import gc
@@ -844,7 +859,7 @@ class RAGChatApp(App):
                 except Exception:
                     # Fallback: save to file
                     filename = "last_message.txt"
-                    with open(filename, "w") as f:
+                    with open(filename, "w", encoding="utf-8") as f:
                         f.write(message_text)
                     chat.write(
                         f"[green]✅ Last message saved to {filename} (clipboard failed)[/green]"
@@ -852,7 +867,7 @@ class RAGChatApp(App):
             else:
                 # pyperclip not available, save to file
                 filename = "last_message.txt"
-                with open(filename, "w") as f:
+                with open(filename, "w", encoding="utf-8") as f:
                     f.write(message_text)
                 chat.write(
                     f"[green]✅ Last message saved to {filename} (install pyperclip for clipboard support)[/green]"
@@ -867,7 +882,7 @@ class RAGChatApp(App):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"chat_export_{timestamp}.txt"
 
-            with open(filename, "w") as f:
+            with open(filename, "w", encoding="utf-8") as f:
                 f.write("RAG Chat Export\n")
                 f.write("=" * 50 + "\n")
                 f.write(f"Exported: {datetime.now().isoformat()}\n")
@@ -928,7 +943,7 @@ class RAGChatApp(App):
                 ],
             }
 
-            with open(filename, "w") as f:
+            with open(filename, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
 
             chat = self.query_one("#chat", RichLog)

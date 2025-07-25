@@ -245,11 +245,13 @@ class RAGService:
             **kwargs: Settings to update
         """
         # Update settings
+        # Update settings
+        settings_to_update = {}
         for key, value in kwargs.items():
-            self.settings_manager.set(key, value)
-
-        # Save settings
-        self.settings_manager.save()
+            settings_to_update[key] = value
+        
+        # Save settings using the proper method
+        self.settings_manager.save_settings(settings_to_update)
 
         # Update RAG system if needed
         if any(key in ["model_name", "temperature"] for key in kwargs):

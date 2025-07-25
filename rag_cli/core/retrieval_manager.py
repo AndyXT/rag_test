@@ -24,7 +24,7 @@ class ExpandedRetriever(BaseRetriever):
         self.base_retriever = base_retriever
         self.k = k
 
-    def _get_relevant_documents(self, query: str) -> List[Document]:
+    def _get_relevant_documents(self, query: str, run_manager=None) -> List[Document]:
         """Get relevant documents using query expansion."""
         # Expand the query
         expanded_queries = self.query_expander(query)
@@ -69,7 +69,7 @@ class ExpandedRetriever(BaseRetriever):
         # Return requested number of documents
         return all_docs[: self.k]
 
-    async def _aget_relevant_documents(self, query: str) -> List[Document]:
+    async def _aget_relevant_documents(self, query: str, run_manager=None) -> List[Document]:
         """Async version - just calls sync version."""
         return self._get_relevant_documents(query)
 

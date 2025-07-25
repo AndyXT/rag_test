@@ -1,4 +1,10 @@
-# RAG System Core Module
+"""RAG System Core Module.
+
+This module provides the core RAG (Retrieval-Augmented Generation) system functionality.
+It orchestrates the integration of document processing, vector storage, embeddings,
+retrieval, and LLM components to provide a complete RAG pipeline for question-answering
+over document collections.
+"""
 import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -105,7 +111,7 @@ class RAGSystem:
     @property
     def reranker(self):
         """Get the reranker instance from the manager"""
-        return self.vectorstore_manager.reranker
+        return self.vectorstore_manager.reranker_manager
 
     @property
     def query_expansion_llm(self):

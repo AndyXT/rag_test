@@ -302,7 +302,7 @@ class ChatService:
             return
 
         try:
-            with open(self.history_file, "r") as f:
+            with open(self.history_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 self.sessions = data.get("sessions", [])
                 self.current_session = data.get("current_session", [])
@@ -314,7 +314,7 @@ class ChatService:
         try:
             data = {"sessions": self.sessions, "current_session": self.current_session}
 
-            with open(self.history_file, "w") as f:
+            with open(self.history_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
 
         except Exception as e:

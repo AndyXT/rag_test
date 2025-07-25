@@ -41,7 +41,7 @@ class SettingsManager:
         """Load settings from file or return defaults"""
         try:
             if os.path.exists(self.settings_file):
-                with open(self.settings_file, "r") as f:
+                with open(self.settings_file, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                     # Merge with defaults to handle missing keys
                     return {**self.default_settings, **loaded}
@@ -65,7 +65,7 @@ class SettingsManager:
         try:
             # Merge with current settings
             self.settings.update(settings)
-            with open(self.settings_file, "w") as f:
+            with open(self.settings_file, "w", encoding="utf-8") as f:
                 json.dump(self.settings, f, indent=2)
             return True
         except (IOError, OSError, PermissionError, TypeError) as e:
