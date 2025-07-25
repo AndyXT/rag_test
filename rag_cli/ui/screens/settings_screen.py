@@ -16,6 +16,23 @@ class SettingsScreen(ModalScreen):
         Binding("ctrl+c", "quit", "Quit"),
     ]
 
+    def _update_field_visibility(self, field_class: str, visible: bool) -> None:
+        """Update visibility of fields by class name.
+        
+        Args:
+            field_class: CSS class name to target
+            visible: Whether to show or hide the fields
+        """
+        try:
+            fields = self.query(f".{field_class}")
+            for field in fields:
+                if visible:
+                    field.add_class("visible")
+                else:
+                    field.remove_class("visible")
+        except Exception:
+            pass  # Non-critical UI operation
+    
     def on_mount(self) -> None:
         """Load current settings when screen is mounted"""
         # Get settings from the settings manager (which reflects current RAG state)
@@ -84,12 +101,7 @@ class SettingsScreen(ModalScreen):
 
         # Ensure Ollama fields are visible by default if provider is ollama
         if settings.get("llm_provider", "ollama") == "ollama":
-            try:
-                ollama_fields = self.query(".ollama-field")
-                for field in ollama_fields:
-                    field.add_class("visible")
-            except Exception:
-                pass
+            self._update_field_visibility("ollama-field", True)
 
     def compose(self) -> ComposeResult:
         with Container(id="settings-container"):
@@ -251,48 +263,20 @@ class SettingsScreen(ModalScreen):
             "anthropic-field",
             "ollama-field",
         ]:
-            try:
-                fields = self.query(f".{field_class}")
-                for field in fields:
-                    field.remove_class("visible")
-            except Exception:
-                pass
+            self._update_field_visibility(field_class, False)
 
-        # Show/hide Ollama fields using proper Textual visibility
-        try:
-            ollama_fields = self.query(".ollama-field")
-            for field in ollama_fields:
-                if provider == "ollama":
-                    field.add_class("visible")
-                else:
-                    field.remove_class("visible")
-        except Exception:
-            pass
+        # Show/hide Ollama fields
+        self._update_field_visibility("ollama-field", provider == "ollama")
 
         # Show API fields for non-Ollama providers
         if provider in ["openai", "anthropic"]:
-            try:
-                api_fields = self.query(".api-field")
-                for field in api_fields:
-                    field.add_class("visible")
-            except Exception:
-                pass
+            self._update_field_visibility("api-field", True)
 
         # Show provider-specific model fields
         if provider == "openai":
-            try:
-                openai_fields = self.query(".openai-field")
-                for field in openai_fields:
-                    field.add_class("visible")
-            except Exception:
-                pass
+            self._update_field_visibility("openai-field", True)
         elif provider == "anthropic":
-            try:
-                anthropic_fields = self.query(".anthropic-field")
-                for field in anthropic_fields:
-                    field.add_class("visible")
-            except Exception:
-                pass
+            self._update_field_visibility("anthropic-field", True)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle provider selection change"""

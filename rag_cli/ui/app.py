@@ -1,5 +1,4 @@
 # RAG Chat Application UI
-import os
 import asyncio
 import json
 import time
@@ -21,7 +20,7 @@ from textual.reactive import reactive
 # Internal imports
 from rag_cli.core.settings_manager import SettingsManager
 from rag_cli.core.chat_history import ChatHistory
-from rag_cli.core.rag_system import RAGSystem
+from rag_cli.services.rag_service import RAGService
 from rag_cli.ui.screens.settings_screen import SettingsScreen
 from rag_cli.ui.screens.help_screen import HelpScreen
 from rag_cli.ui.screens.document_browser import DocumentBrowserScreen
@@ -228,19 +227,12 @@ class RAGChatApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.settings_manager = SettingsManager()
-        # Initialize RAG system with saved settings
-        self.rag = RAGSystem(
-            model_name=self.settings_manager.get("ollama_model", "llama3.2:3b"),
-            temperature=self.settings_manager.get("temperature", 0.1),
-            chunk_size=self.settings_manager.get("chunk_size", 1000),
-            chunk_overlap=self.settings_manager.get("chunk_overlap", 200),
-            retrieval_k=self.settings_manager.get("retrieval_k", 3),
-            settings_manager=self.settings_manager,
-        )
+        # Initialize RAG service
+        self.rag_service = RAGService(settings_file="settings.json")
         self.chat_history = ChatHistory()
         self.current_progress = 0
         self.progress_timer: Optional[Any] = None
-        self.chat_messages: List[Dict[str, Any]] = []  # Store messages for copying
+        self.chat_messages: List[Dict[str, Any]] = []  # Store messages for copying  # Store messages for copying
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -328,7 +320,7 @@ class RAGChatApp(App):
         self.update_stats()
 
         # Try to load existing DB automatically
-        if self.rag.load_existing_db():
+        if self.rag_service.load_database():
             chat.write("[green]✓ Automatically loaded existing ChromaDB[/green]")
             self.update_stats()
         else:
@@ -341,15 +333,24 @@ class RAGChatApp(App):
         stats_content = self.query_one("#stats-content", RichLog)
         stats_content.clear()
 
-        stats = self.rag.get_stats()
-        if stats:
+        info = self.rag_service.get_system_info()
+        if info:
             stats_table = Table(show_header=False, box=None, padding=0)
             stats_table.add_column("Key", style="cyan")
             stats_table.add_column("Value", style="white")
 
-            for key, value in stats.items():
-                display_key = key.replace("_", " ").title()
-                stats_table.add_row(display_key, str(value))
+            # Extract key information from nested structure
+            db_info = info.get("database", {})
+            settings = info.get("settings", {})
+            system = info.get("system", {})
+            
+            # Display most important stats
+            if db_info.get("loaded") and db_info.get("document_count", 0) > 0:
+                stats_table.add_row("Documents", str(db_info.get("document_count", "Unknown")))
+            stats_table.add_row("Model", settings.get("model", "Unknown"))
+            stats_table.add_row("Temperature", f"{settings.get('temperature', 0.1):.1f}")
+            stats_table.add_row("Chunk Size", str(settings.get("chunk_size", 1000)))
+            stats_table.add_row("DB Loaded", "✅" if system.get("vectorstore_loaded") else "❌")
 
             stats_content.write(stats_table)
         else:
@@ -404,7 +405,7 @@ class RAGChatApp(App):
         # Simulate some loading time for better UX
         await asyncio.sleep(0.5)
 
-        if self.rag.load_existing_db():
+        if self.rag_service.load_database():
             chat.write("[green]✅ Database loaded successfully![/green]")
             self.update_stats()
             self.update_progress("✅ Database ready", 100)
@@ -421,112 +422,133 @@ class RAGChatApp(App):
         self.processing = True
 
         try:
-            # Check if documents directory exists
-            docs_path = Path("./documents")
-            if not docs_path.exists():
-                raise ValueError(
-                    "Documents directory './documents' not found. Please create it and add PDF files."
-                )
-
-            # Check if there are any PDF files
-            pdf_files = list(docs_path.glob("**/*.pdf"))
-            if not pdf_files:
-                raise ValueError(
-                    "No PDF files found in './documents' directory. Please add some PDF files."
-                )
-
-            self.update_progress(f"📂 Found {len(pdf_files)} PDF files...", 10)
-            await asyncio.sleep(0.5)
-
-            # Create database with detailed progress tracking
-            try:
-                # Define a thread-safe progress callback that updates the UI
-                progress_messages = []
-
-                def progress_callback(message):
-                    progress_messages.append(message)
-
-                # Run database creation in thread executor to avoid async context issues
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: self.rag.create_db_from_docs(
-                        docs_path="./documents",
-                        db_path="./chroma_db",
-                        progress_callback=progress_callback,
-                    ),
-                )
-
-                self.update_progress("✅ Database creation complete!", 100)
-                chat.write("[green]✅ Database created successfully![/green]")
-
-                # Show progress messages that were collected
-                if progress_messages:
-                    chat.write(
-                        f"[blue]📊 Processing summary: {progress_messages[-1]}[/blue]"
-                    )
-
-                # Show summary of what was processed
-                stats = self.rag.get_stats()
-                if stats and stats.get("document_count", 0) > 0:
-                    chat.write(
-                        f"[blue]📊 Processed {stats['document_count']} document chunks[/blue]"
-                    )
-
-                self.update_stats()
-
-            except Exception as pdf_error:
-                # More specific error handling for PDF processing issues
-                error_msg = str(pdf_error)
-
-                if "all batches failed" in error_msg.lower():
-                    chat.write(
-                        "[red]❌ Database creation failed: All document batches failed to process[/red]"
-                    )
-                    chat.write(
-                        "[yellow]💡 This may be due to embedding model issues or document format problems.[/yellow]"
-                    )
-                    chat.write(
-                        "[yellow]💡 Try restarting the application or check the terminal for detailed errors.[/yellow]"
-                    )
-                elif (
-                    "fds_to_keep" in error_msg or "file descriptor" in error_msg.lower()
-                ):
-                    chat.write(
-                        "[red]❌ PDF processing error: File descriptor issue[/red]"
-                    )
-                    chat.write(
-                        "[yellow]💡 This is often caused by corrupted PDFs or system limitations.[/yellow]"
-                    )
-                    chat.write(
-                        "[yellow]💡 Try removing problematic PDF files or restarting the application.[/yellow]"
-                    )
-                elif "No PDF files found" in error_msg:
-                    chat.write(
-                        "[red]❌ No PDF files found in ./documents directory[/red]"
-                    )
-                    chat.write(
-                        "[yellow]💡 Please add some PDF files to the ./documents directory.[/yellow]"
-                    )
-                elif "No documents could be processed" in error_msg:
-                    chat.write("[red]❌ All PDF files failed to process[/red]")
-                    chat.write(
-                        "[yellow]💡 Check if your PDF files are corrupted or password-protected.[/yellow]"
-                    )
-                else:
-                    chat.write(f"[red]❌ Database creation error: {error_msg}[/red]")
-                    chat.write(
-                        "[yellow]💡 Check the error message above for specific details.[/yellow]"
-                    )
-
-                self.update_progress(f"❌ Error: {error_msg[:50]}...")
-
+            pdf_files = await self._validate_documents_directory()
+            await self._create_database_with_progress(pdf_files, chat)
         except Exception as e:
-            chat.write(f"[red]❌ Error creating database: {str(e)}[/red]")
-            self.update_progress(f"❌ Error: {str(e)}")
+            await self._handle_database_creation_error(e, chat)
+        finally:
+            await asyncio.sleep(1.5)
+            self.processing = False
 
-        await asyncio.sleep(1.5)
-        self.processing = False
+    async def _validate_documents_directory(self):
+        """Validate documents directory and return PDF files"""
+        docs_path = Path("./documents")
+        if not docs_path.exists():
+            raise ValueError(
+                "Documents directory './documents' not found. Please create it and add PDF files."
+            )
+        
+        pdf_files = list(docs_path.glob("**/*.pdf"))
+        if not pdf_files:
+            raise ValueError(
+                "No PDF files found in './documents' directory. Please add some PDF files."
+            )
+        return pdf_files
+
+    async def _create_database_with_progress(self, pdf_files, chat):
+        """Create database with progress tracking"""
+        self.update_progress(f"📂 Found {len(pdf_files)} PDF files...", 10)
+        await asyncio.sleep(0.5)
+
+        # Define a thread-safe progress callback that updates the UI
+        progress_messages = []
+
+        def progress_callback(message):
+            progress_messages.append(message)
+
+        # Run database creation in thread executor to avoid async context issues
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self.rag_service.create_database(
+                docs_path="./documents",
+                db_path="./chroma_db",
+                progress_callback=progress_callback,
+            ),
+        )
+
+        self.update_progress("✅ Database creation complete!", 100)
+        chat.write("[green]✅ Database created successfully![/green]")
+
+        # Show progress messages that were collected
+        if progress_messages:
+            chat.write(
+                f"[blue]📊 Processing summary: {progress_messages[-1]}[/blue]"
+            )
+
+        # Show summary of what was processed
+        stats = self.rag_service.get_system_info()
+        if stats and stats.get("document_count", 0) > 0:
+            chat.write(
+                f"[blue]📊 Processed {stats['document_count']} document chunks[/blue]"
+            )
+
+        self.update_stats()
+
+    async def _handle_database_creation_error(self, error, chat):
+        """Handle database creation errors with specific messages"""
+        error_msg = str(error)
+        
+        error_handlers = {
+            "all batches failed": self._handle_batch_failure_error,
+            "fds_to_keep": self._handle_file_descriptor_error,
+            "file descriptor": self._handle_file_descriptor_error,
+            "No PDF files found": self._handle_no_pdf_error,
+            "No documents could be processed": self._handle_processing_error
+        }
+        
+        for key, handler in error_handlers.items():
+            if key in error_msg or key.lower() in error_msg.lower():
+                handler(chat)
+                self.update_progress(f"❌ Error: {error_msg[:50]}...")
+                return
+        
+        # Default error handling
+        chat.write(f"[red]❌ Database creation error: {error_msg}[/red]")
+        chat.write(
+            "[yellow]💡 Check the error message above for specific details.[/yellow]"
+        )
+        self.update_progress(f"❌ Error: {error_msg[:50]}...")
+
+    def _handle_batch_failure_error(self, chat):
+        """Handle batch failure errors"""
+        chat.write(
+            "[red]❌ Database creation failed: All document batches failed to process[/red]"
+        )
+        chat.write(
+            "[yellow]💡 This may be due to embedding model issues or document format problems.[/yellow]"
+        )
+        chat.write(
+            "[yellow]💡 Try restarting the application or check the terminal for detailed errors.[/yellow]"
+        )
+
+    def _handle_file_descriptor_error(self, chat):
+        """Handle file descriptor errors"""
+        chat.write(
+            "[red]❌ PDF processing error: File descriptor issue[/red]"
+        )
+        chat.write(
+            "[yellow]💡 This is often caused by corrupted PDFs or system limitations.[/yellow]"
+        )
+        chat.write(
+            "[yellow]💡 Try removing problematic PDF files or restarting the application.[/yellow]"
+        )
+
+    def _handle_no_pdf_error(self, chat):
+        """Handle no PDF files error"""
+        chat.write(
+            "[red]❌ No PDF files found in ./documents directory[/red]"
+        )
+        chat.write(
+            "[yellow]💡 Please add some PDF files to the ./documents directory.[/yellow]"
+        )
+
+    def _handle_processing_error(self, chat):
+        """Handle processing errors"""
+        chat.write("[red]❌ All PDF files failed to process[/red]")
+        chat.write(
+            "[yellow]💡 Check if your PDF files are corrupted or password-protected.[/yellow]"
+        )
 
     async def _process_question(self, question: str) -> None:
         """Process user question with enhanced UI feedback."""
@@ -547,7 +569,7 @@ class RAGChatApp(App):
             {"type": "user", "content": question, "timestamp": timestamp}
         )
 
-        if not self.rag.vectorstore:
+        if not self.rag_service.rag_system.vectorstore:
             chat.write("[red]⚠️ Please load or create a database first.[/red]")
             return
 
@@ -566,7 +588,10 @@ class RAGChatApp(App):
             
             # Add timeout to prevent infinite hanging
             try:
-                result = await asyncio.wait_for(self.rag.query(question), timeout=60.0)
+                result = await asyncio.wait_for(
+                    self.rag_service.query_service.process_query(question), 
+                    timeout=60.0
+                )
             except asyncio.TimeoutError:
                 chat.write("[red]✗ Query timed out after 60 seconds. Try disabling query expansion or reranking in settings.[/red]")
                 self.processing = False
@@ -666,7 +691,7 @@ class RAGChatApp(App):
     def action_reload_db(self) -> None:
         """Reload the database."""
         chat = self.query_one("#chat", RichLog)
-        if self.rag.load_existing_db():
+        if self.rag_service.load_database():
             chat.write("[green]🔄 Database reloaded successfully![/green]")
             self.update_stats()
         else:
@@ -705,7 +730,7 @@ class RAGChatApp(App):
         
         try:
             # Clean the cache
-            self.rag._clean_hf_cache_locks()
+            self.rag_service.database_service.cache_manager.clean_hf_cache_locks()
             
             # Force garbage collection
             import gc
@@ -730,28 +755,23 @@ class RAGChatApp(App):
         self.exit()
 
     def action_restart_rag(self) -> None:
-        """Restart the RAG system to fix file descriptor issues."""
+        """Restart the RAG system completely."""
         chat = self.query_one("#chat", RichLog)
         chat.write("[yellow]🔄 Restarting RAG system...[/yellow]")
 
         try:
             # Force garbage collection
             import gc
-
             gc.collect()
 
-            # Recreate the RAG system
-            self.rag = RAGSystem(
-                model_name=self.settings_manager.get("ollama_model", "llama3.2:3b"),
-                temperature=self.settings_manager.get("temperature", 0.1),
-                chunk_size=self.settings_manager.get("chunk_size", 1000),
-                chunk_overlap=self.settings_manager.get("chunk_overlap", 200),
-                retrieval_k=self.settings_manager.get("retrieval_k", 3),
-                settings_manager=self.settings_manager,
-            )
+            # Reset the service
+            self.rag_service.reset_system()
+            
+            # Reinitialize the service with current settings
+            self.rag_service = RAGService(settings_file="settings.json")
 
             # Try to reload the database
-            if self.rag.load_existing_db():
+            if self.rag_service.load_database():
                 chat.write("[green]✅ RAG system restarted successfully![/green]")
                 self.update_stats()
             else:
@@ -809,8 +829,8 @@ class RAGChatApp(App):
                 f.write("RAG Chat Export\n")
                 f.write("=" * 50 + "\n")
                 f.write(f"Exported: {datetime.now().isoformat()}\n")
-                f.write(f"Model: {self.rag._get_current_model_name()}\n")
-                f.write(f"Temperature: {self.rag.temperature}\n")
+                f.write(f"Model: {self.rag_service.settings_manager.get("model_name", "unknown")}\n")
+                f.write(f"Temperature: {self.rag_service.settings_manager.get("temperature", 0.1)}\n")
                 f.write("=" * 50 + "\n\n")
 
                 # Export actual chat messages
@@ -838,10 +858,10 @@ class RAGChatApp(App):
             export_data = {
                 "export_timestamp": datetime.now().isoformat(),
                 "model_settings": {
-                    "model": self.rag._get_current_model_name(),
-                    "temperature": self.rag.temperature,
-                    "chunk_size": self.rag.chunk_size,
-                    "retrieval_k": self.rag.retrieval_k,
+                    "model": self.rag_service.settings_manager.get("model_name", "unknown"),
+                    "temperature": self.rag_service.settings_manager.get("temperature", 0.1),
+                    "chunk_size": self.rag_service.settings_manager.get("chunk_size", 1000),
+                    "retrieval_k": self.rag_service.settings_manager.get("retrieval_k", 3),
                 },
                 "sessions": self.chat_history.sessions,
                 "current_session": [
@@ -866,5 +886,7 @@ class RAGChatApp(App):
 
 
 if __name__ == "__main__":
+    from rag_cli.utils.logger import RichLogger
+    RichLogger.set_tui_mode(True)
     app = RAGChatApp()
     app.run()

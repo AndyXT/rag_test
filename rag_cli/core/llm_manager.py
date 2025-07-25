@@ -3,8 +3,12 @@ import os
 from typing import Optional, Any, List
 from pathlib import Path
 
-# Rich imports for output formatting
-from rich import print
+# Import our logger and defaults
+from rag_cli.utils.logger import RichLogger
+from rag_cli.utils.defaults import (
+    DEFAULT_OLLAMA_MODEL, DEFAULT_TEMPERATURE, LARGE_MODELS,
+    DEFAULT_QUERY_EXPANSION_MODEL
+)
 
 # LangChain imports
 from langchain_ollama import OllamaLLM
@@ -20,10 +24,10 @@ class LLMManager:
         self.settings_manager = settings_manager
         self.llm: Optional[BaseLanguageModel] = None
         self.query_expansion_llm: Optional[BaseLanguageModel] = None
-        self.model_name = "llama3.2:3b"
+        self.model_name = DEFAULT_OLLAMA_MODEL
         self.temperature = 0.1
 
-    def initialize(self, model_name: str = "llama3.2:3b", temperature: float = 0.1):
+    def initialize(self, model_name: str = DEFAULT_OLLAMA_MODEL, temperature: float = DEFAULT_TEMPERATURE):
         """Initialize the main LLM"""
         self.model_name = model_name
         self.temperature = temperature
@@ -47,23 +51,17 @@ class LLMManager:
             elif provider == "anthropic":
                 self._initialize_anthropic()
             else:
-                print(
-                    f"[yellow]⚠ Unknown provider '{provider}', falling back to Ollama[/yellow]"
-                )
+                RichLogger.warning(f"Unknown provider '{provider}', falling back to Ollama")
                 self._initialize_ollama()
         except Exception as e:
-            print(f"[red]✗ Failed to initialize {provider}: {str(e)}[/red]")
+            RichLogger.error(f"Failed to initialize {provider}: {str(e)}")
             if provider != "ollama":
-                print("[yellow]⚠ Falling back to Ollama[/yellow]")
+                RichLogger.warning("Falling back to Ollama")
                 try:
                     self._initialize_ollama()
                 except Exception as fallback_error:
-                    print(
-                        f"[red]✗ Ollama fallback also failed: {str(fallback_error)}[/red]"
-                    )
-                    print(
-                        "[red]Please ensure Ollama is installed and running, or configure an API provider[/red]"
-                    )
+                    RichLogger.error(f"Ollama fallback also failed: {str(fallback_error)}")
+                    RichLogger.error("Please ensure Ollama is installed and running, or configure an API provider")
                     raise fallback_error
             else:
                 raise e
@@ -71,7 +69,7 @@ class LLMManager:
     def _initialize_ollama(self):
         """Initialize Ollama LLM"""
         # Get the Ollama model from settings
-        ollama_model = self.settings_manager.get("ollama_model", "llama3.2:3b") if self.settings_manager else self.model_name
+        ollama_model = self.settings_manager.get("ollama_model", DEFAULT_OLLAMA_MODEL) if self.settings_manager else self.model_name
         
         try:
             self.llm = OllamaLLM(
@@ -81,21 +79,19 @@ class LLMManager:
                 num_thread=1,  # Use single thread to avoid fd issues
                 keep_alive="5m",  # Keep model loaded for only 5 minutes to free memory faster
             )
-            print(f"[green]✓ Initialized Ollama with model: {ollama_model}[/green]")
+            RichLogger.success(f"Initialized Ollama with model: {ollama_model}")
             
             # Check if this is a large model that might conflict with query expansion
-            large_models = ["qwen2.5-coder:32b", "mixtral:8x7b", "llama3.1:70b", "qwen2.5:32b"]
+            large_models = LARGE_MODELS[:4]  # Use first 4 large models
             if any(ollama_model.startswith(m) for m in large_models):
-                print(f"[yellow]⚠ Large model detected ({ollama_model}). Query expansion may cause memory issues.[/yellow]")
+                RichLogger.warning(f"Large model detected ({ollama_model}). Query expansion may cause memory issues.")
                 if self.settings_manager and self.settings_manager.get("use_query_expansion", False):
-                    print("[yellow]⚠ Consider disabling query expansion for better performance.[/yellow]")
+                    RichLogger.warning("Consider disabling query expansion for better performance.")
                     
         except Exception:
             # Fallback to simpler initialization
             self.llm = OllamaLLM(model=ollama_model, temperature=self.temperature)
-            print(
-                f"[green]✓ Initialized Ollama (simple mode) with model: {ollama_model}[/green]"
-            )
+            RichLogger.success(f"Initialized Ollama (simple mode) with model: {ollama_model}")
 
     def _initialize_openai(self):
         """Initialize OpenAI LLM"""
@@ -114,7 +110,7 @@ class LLMManager:
 
         self.llm = ChatOpenAI(**kwargs)
         api_source = "environment" if os.environ.get("OPENAI_API_KEY") else "settings"
-        print(f"[green]✓ Initialized OpenAI with model: {model} (API key from {api_source})[/green]")
+        RichLogger.success(f"Initialized OpenAI with model: {model} (API key from {api_source})")
 
     def _initialize_anthropic(self):
         """Initialize Anthropic LLM"""
@@ -131,7 +127,7 @@ class LLMManager:
             model=model, temperature=self.temperature, api_key=api_key
         )
         api_source = "environment" if os.environ.get("ANTHROPIC_API_KEY") else "settings"
-        print(f"[green]✓ Initialized Anthropic with model: {model} (API key from {api_source})[/green]")
+        RichLogger.success(f"Initialized Anthropic with model: {model} (API key from {api_source})")
 
     def _initialize_query_expansion_llm(self):
         """Initialize query expansion LLM if enabled"""
@@ -143,18 +139,18 @@ class LLMManager:
             return
             
         # Check if main model is large - if so, skip query expansion
-        main_model = self.settings_manager.get("ollama_model", "llama3.2:3b")
-        large_models = ["qwen2.5-coder:32b", "mixtral:8x7b", "llama3.1:70b", "qwen2.5:32b", "deepseek-coder:33b"]
+        main_model = self.settings_manager.get("ollama_model", DEFAULT_OLLAMA_MODEL)
+        large_models = LARGE_MODELS
         if any(main_model.startswith(m) for m in large_models):
-            print(f"[yellow]⚠ Large main model detected ({main_model}). Skipping query expansion to prevent memory issues.[/yellow]")
-            print("[yellow]ℹ To use query expansion, switch to a smaller main model (e.g., qwen2.5-coder:7b)[/yellow]")
+            RichLogger.warning(f"Large main model detected ({main_model}). Skipping query expansion to prevent memory issues.")
+            RichLogger.info("To use query expansion, switch to a smaller main model (e.g., qwen2.5-coder:7b)")
             self.query_expansion_llm = None
             return
             
-        query_expansion_model = self.settings_manager.get("query_expansion_model", "llama3.2:3b")
+        query_expansion_model = self.settings_manager.get("query_expansion_model", DEFAULT_QUERY_EXPANSION_MODEL)
         
         try:
-            print(f"[blue]ℹ Initializing query expansion LLM: {query_expansion_model}[/blue]")
+            RichLogger.info(f"Initializing query expansion LLM: {query_expansion_model}")
             # Use OllamaLLM for query expansion with memory-efficient settings
             self.query_expansion_llm = OllamaLLM(
                 model=query_expansion_model,
@@ -162,10 +158,10 @@ class LLMManager:
                 num_ctx=512,  # Small context window for query expansion
                 keep_alive="1m",  # Unload quickly after use
             )
-            print("[green]✓ Query expansion LLM initialized successfully[/green]")
+            RichLogger.success("Query expansion LLM initialized successfully")
         except Exception as e:
-            print(f"[red]✗ Failed to initialize query expansion LLM: {str(e)}[/red]")
-            print("[yellow]⚠ Continuing without query expansion[/yellow]")
+            RichLogger.error(f"Failed to initialize query expansion LLM: {str(e)}")
+            RichLogger.warning("Continuing without query expansion")
             self.query_expansion_llm = None
 
     def expand_query(self, original_query: str, expansion_count: int = 3) -> List[str]:
@@ -188,7 +184,7 @@ Format each query on a new line. Only output the queries, no explanations.
 
 Queries:"""
             
-            print(f"[blue]ℹ Expanding query: {original_query}[/blue]")
+            RichLogger.info(f"Expanding query: {original_query}")
             
             # Get expanded queries with timeout protection
             try:
@@ -197,7 +193,7 @@ Queries:"""
                 future = loop.run_in_executor(None, self.query_expansion_llm.invoke, expansion_prompt)
                 response = loop.run_until_complete(asyncio.wait_for(future, timeout=10.0))
             except asyncio.TimeoutError:
-                print(f"[red]✗ Query expansion timed out after 10 seconds[/red]")
+                RichLogger.error("Query expansion timed out after 10 seconds")
                 return [original_query]
             finally:
                 loop.close()
@@ -208,14 +204,14 @@ Queries:"""
             # Always include original query
             all_queries = [original_query] + expanded_queries[:expansion_count]
             
-            print(f"[green]✓ Generated {len(all_queries)} query variations[/green]")
+            RichLogger.success(f"Generated {len(all_queries)} query variations")
             for i, q in enumerate(all_queries):
-                print(f"  Query {i+1}: {q[:80]}...")
+                RichLogger.debug(f"  Query {i+1}: {q[:80]}...")
             
             return all_queries
             
         except Exception as e:
-            print(f"[red]✗ Query expansion failed: {str(e)}[/red]")
+            RichLogger.error(f"Query expansion failed: {str(e)}")
             return [original_query]
 
     def get_current_model_name(self) -> str:
@@ -226,7 +222,7 @@ Queries:"""
         provider = self.settings_manager.get("llm_provider", "ollama")
         
         if provider == "ollama":
-            return self.settings_manager.get("ollama_model", "llama3.2:3b")
+            return self.settings_manager.get("ollama_model", DEFAULT_OLLAMA_MODEL)
         elif provider == "openai":
             return self.settings_manager.get("openai_model", "gpt-3.5-turbo")
         elif provider == "anthropic":

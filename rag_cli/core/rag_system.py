@@ -1,12 +1,14 @@
 # RAG System Core Module
-import os
-import gc
 import asyncio
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-# Rich imports for output formatting
-from rich import print
+# Import our logger and defaults
+from rag_cli.utils.logger import RichLogger
+from rag_cli.utils.defaults import (
+    DEFAULT_OLLAMA_MODEL, DEFAULT_TEMPERATURE, DEFAULT_CHUNK_SIZE, 
+    DEFAULT_CHUNK_OVERLAP, DEFAULT_RETRIEVAL_K
+)
 
 # LangChain imports
 from langchain.chains import create_retrieval_chain
@@ -18,6 +20,10 @@ from langchain_core.documents import Document
 # Import our managers
 from .llm_manager import LLMManager
 from .vectorstore_manager import VectorStoreManager
+
+# Import processors
+from .query_processor import QueryProcessor
+from .error_handler import ErrorHandler
 
 
 class ExpandedRetriever(BaseRetriever):
@@ -41,7 +47,7 @@ class ExpandedRetriever(BaseRetriever):
         
         for expanded_query in expanded_queries:
             if len(all_docs) >= max_total_docs:
-                print(f"[yellow]⚠ Reached maximum document limit ({max_total_docs}), stopping retrieval[/yellow]")
+                RichLogger.warning(f"Reached maximum document limit ({max_total_docs}), stopping retrieval")
                 break
                 
             try:
@@ -56,11 +62,11 @@ class ExpandedRetriever(BaseRetriever):
                         added_count += 1
                         if len(all_docs) >= max_total_docs:
                             break
-                print(f"[blue]ℹ Query '{expanded_query[:50]}...' added {added_count} new documents[/blue]")
+                RichLogger.info(f"Query '{expanded_query[:50]}...' added {added_count} new documents")
             except Exception as e:
-                print(f"[yellow]⚠ Failed to retrieve for query: {expanded_query[:50]}... - {str(e)}[/yellow]")
+                RichLogger.warning(f"Failed to retrieve for query: {expanded_query[:50]}... - {str(e)}")
         
-        print(f"[INFO] Query expansion retrieved {len(all_docs)} unique documents from {len(expanded_queries)} queries")
+        RichLogger.info(f"Query expansion retrieved {len(all_docs)} unique documents from {len(expanded_queries)} queries")
         
         # Return requested number of documents
         return all_docs[:self.k]
@@ -75,13 +81,13 @@ class RAGSystem:
 
     def __init__(
         self,
-        model_name="llama3.2:3b",
-        temperature=0.1,
-        chunk_size=1000,
-        chunk_overlap=200,
-        retrieval_k=3,
-        settings_manager=None,
-    ):
+        model_name: str = DEFAULT_OLLAMA_MODEL,
+        temperature: float = DEFAULT_TEMPERATURE,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+        retrieval_k: int = DEFAULT_RETRIEVAL_K,
+        settings_manager: Optional[Any] = None,
+    ) -> None:
         self.model_name = model_name
         self.temperature = temperature
         self.chunk_size = chunk_size
@@ -95,11 +101,15 @@ class RAGSystem:
         self.llm_manager = LLMManager(settings_manager)
         self.vectorstore_manager = VectorStoreManager(settings_manager)
         
+        # Initialize processors
+        self.query_processor = QueryProcessor(settings_manager)
+        self.error_handler = ErrorHandler(model_name)
+        
         # Initialize the managers
         self.llm_manager.initialize(model_name, temperature)
         self.vectorstore_manager.initialize(chunk_size, chunk_overlap)
 
-    def update_settings(self, **kwargs):
+    def update_settings(self, **kwargs) -> None:
         """Update RAG system settings"""
         for key, value in kwargs.items():
             if hasattr(self, key):
@@ -138,7 +148,7 @@ class RAGSystem:
         """Get the query expansion LLM from the manager"""
         return self.llm_manager.get_query_expansion_llm()
 
-    def load_existing_db(self, db_path="./chroma_db"):
+    def load_existing_db(self, db_path: str = "./chroma_db") -> bool:
         """Load existing ChromaDB with modern configuration"""
         result = self.vectorstore_manager.load_existing_db(db_path)
         if result:
@@ -146,8 +156,9 @@ class RAGSystem:
         return result
 
     def create_db_from_docs(
-        self, docs_path="./documents", db_path="./chroma_db", progress_callback=None
-    ):
+        self, docs_path: str = "./documents", db_path: str = "./chroma_db", 
+        progress_callback: Optional[Any] = None
+    ) -> None:
         """Create new ChromaDB from documents with robust error handling and file descriptor management"""
         self.vectorstore_manager.create_db_from_docs(docs_path, db_path, progress_callback)
         if progress_callback:
@@ -156,8 +167,7 @@ class RAGSystem:
 
     def _expand_query(self, original_query):
         """Expand a query using the small LLM to improve retrieval"""
-        expansion_count = self.settings_manager.get("expansion_queries", 3) if self.settings_manager else 3
-        return self.llm_manager.expand_query(original_query, expansion_count)
+        return self.query_processor.expand_query(original_query, self.query_expansion_llm)
 
     def _rerank_documents(self, query, documents):
         """Rerank documents using the cross-encoder model"""
@@ -172,40 +182,46 @@ class RAGSystem:
             
         return ExpandedRetriever(self, base_retriever, k)
     
+    def _load_system_prompt(self, prompt_file: str = "system_prompt.md") -> str:
+        """Load system prompt from file or return default.
+        
+        Args:
+            prompt_file: Path to the system prompt file
+            
+        Returns:
+            System prompt string with {context} placeholder
+        """
+        from rag_cli.utils.logger import RichLogger
+        
+        default_prompt = (
+            "You are a helpful assistant. Use the following pieces of retrieved context to answer the question. "
+            "Provide a comprehensive answer that fully addresses the question. "
+            "If you don't know the answer based on the context, say so.\n\n"
+            "{context}"
+        )
+        
+        prompt_path = Path(prompt_file)
+        if not prompt_path.exists():
+            return default_prompt
+            
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                # Ensure {context} placeholder is present
+                if "{context}" not in content:
+                    content += "\n\nContext:\n{context}"
+                RichLogger.success(f"Loaded custom system prompt from {prompt_file}")
+                return content
+        except Exception as e:
+            RichLogger.warning(f"Failed to load {prompt_file}: {str(e)}")
+            return default_prompt
+    
     def _setup_qa_chain(self):
         """Setup the QA chain using modern LangChain approach"""
-        print(f"[INFO] Setting up QA chain with retrieval_k={self.retrieval_k}")
+        RichLogger.info(f"Setting up QA chain with retrieval_k={self.retrieval_k}")
         
         # Load system prompt from file if available
-        system_prompt_file = Path("system_prompt.md")
-        if system_prompt_file.exists():
-            try:
-                with open(system_prompt_file, 'r', encoding='utf-8') as f:
-                    system_prompt_content = f.read()
-                # Extract just the content before {context} placeholder
-                if "{context}" in system_prompt_content:
-                    system_prompt = system_prompt_content
-                else:
-                    # Add context placeholder if not present
-                    system_prompt = system_prompt_content + "\n\nContext:\n{context}"
-                print("[green]✓ Loaded custom system prompt from system_prompt.md[/green]")
-            except Exception as e:
-                print(f"[yellow]⚠ Failed to load system_prompt.md: {str(e)}[/yellow]")
-                # Fallback to default prompt
-                system_prompt = (
-                    "You are a helpful assistant. Use the following pieces of retrieved context to answer the question. "
-                    "Provide a comprehensive answer that fully addresses the question. "
-                    "If you don't know the answer based on the context, say so.\n\n"
-                    "{context}"
-                )
-        else:
-            # Default prompt without length restrictions
-            system_prompt = (
-                "You are a helpful assistant. Use the following pieces of retrieved context to answer the question. "
-                "Provide a comprehensive answer that fully addresses the question. "
-                "If you don't know the answer based on the context, say so.\n\n"
-                "{context}"
-            )
+        system_prompt = self._load_system_prompt()
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -224,7 +240,224 @@ class RAGSystem:
             question_answer_chain,
         )
 
-    async def query(self, question):
+    def _should_use_rag(self) -> bool:
+        """Check if RAG should be used."""
+        return self.vectorstore is not None and hasattr(self.qa_chain, 'invoke')
+    
+    async def _execute_qa_chain(self, question: str) -> Dict[str, Any]:
+        """Execute query using the QA chain."""
+        result = self.qa_chain.invoke({"input": question})
+        
+        # Extract answer and source documents
+        answer_text = result.get("answer", "No answer generated")
+        source_docs = result.get("context", [])
+        
+        # Process result using shared logic
+        answer_text, source_docs = self._process_qa_result(answer_text, source_docs, question)
+        
+        return {"response": answer_text, "context": source_docs}
+    
+    def _log_relevance_scores(self, question: str) -> None:
+        """Log document relevance scores for debugging."""
+        try:
+            docs_with_scores = self.vectorstore.similarity_search_with_score(question, k=self.retrieval_k)
+            # Convert to documents with metadata
+            documents = []
+            for doc, score in docs_with_scores:
+                doc.metadata = doc.metadata or {}
+                doc.metadata['score'] = score
+                documents.append(doc)
+            # Use query processor to log scores
+            self.query_processor.log_relevance_scores(documents[:3])
+        except Exception as e:
+            RichLogger.warning(f"Could not get relevance scores: {str(e)}")
+    
+    async def _execute_manual_retrieval(self, question: str) -> Dict[str, Any]:
+        """Execute manual retrieval when QA chain is not available."""
+        # Use expanded retriever if query expansion is enabled
+        retriever = self._create_expanded_retriever(self.retrieval_k)
+        
+        # Get relevant documents using shared retrieval logic
+        relevant_docs = self._perform_retrieval(retriever, question)
+        
+        if not relevant_docs:
+            return {
+                "response": "I couldn't find any relevant information in the documents to answer your question.", 
+                "context": []
+            }
+        
+        # Apply reranking if enabled
+        if self.reranker and relevant_docs:
+            relevant_docs = self._rerank_documents(question, relevant_docs)
+        
+        # Format context and create prompt
+        context = self._format_context(relevant_docs)
+        prompt = self._create_prompt(context, question)
+        
+        # Query LLM
+        response = self.llm_manager.invoke(prompt)
+        
+        return {"response": response, "context": relevant_docs}
+    
+    def _format_context(self, documents: List) -> str:
+        """Format documents into context string."""
+        return self.query_processor.format_context(documents)
+    
+    def _create_prompt(self, context: str, question: str) -> str:
+        """Create prompt with context and question."""
+        system_prompt = self._load_system_prompt()
+        return self.query_processor.create_rag_prompt(question, context, system_prompt)
+
+    def _perform_retrieval(self, retriever, question):
+        """Shared retrieval logic with fallback"""
+        try:
+            return retriever.invoke(question)
+        except Exception as e:
+            from rag_cli.utils.logger import RichLogger
+            RichLogger.warning(f"Retriever invoke failed, using fallback: {str(e)}")
+            return retriever.get_relevant_documents(question)
+
+    def _process_qa_result(self, answer_text, source_docs, question):
+        """Process QA chain result with reranking and conversion"""
+        # Apply reranking if enabled
+        if self.reranker and source_docs:
+            source_docs = self._rerank_documents(question, source_docs)
+        
+        # Log relevance scores for debugging
+        self._log_relevance_scores(question)
+        
+        # Convert response to string if it's an object
+        if hasattr(answer_text, 'content'):
+            answer_text = answer_text.content
+        else:
+            answer_text = str(answer_text)
+        
+        return answer_text, source_docs
+    
+    def _handle_file_descriptor_error(self, question: str) -> Dict[str, Any]:
+        """Handle file descriptor errors with fallback."""
+        RichLogger.warning("Falling back to simple query without retrieval due to file descriptor error")
+        
+        # Create a specific file descriptor error
+        fd_error = Exception("fds_to_keep error - file descriptor limit exceeded")
+        error_info = self.error_handler.handle_error(fd_error)
+        
+        # Try fallback query
+        try:
+            simple_prompt = f"Question: {question}\n\nPlease provide a helpful response based on general knowledge."
+            response = self.llm_manager.invoke(simple_prompt)
+            return {"response": response, "context": [], "error_info": error_info}
+        except Exception:
+            # Return formatted error message
+            return {
+                "response": self.error_handler.format_error_for_user(error_info), 
+                "context": [],
+                "error_info": error_info
+            }
+    
+    def _get_connection_error_message(self, provider: str) -> str:
+        """Get provider-specific connection error messages."""
+        messages = {
+            "ollama": (
+                "Cannot connect to Ollama. You can:\n"
+                "1. Start Ollama (run 'ollama serve' in terminal)\n"
+                "2. Install the model (run 'ollama pull llama3.2')\n"
+                "3. Or switch to an API provider in Settings (Ctrl+S)"
+            ),
+            "openai": (
+                "Cannot connect to OpenAI API. Please check:\n"
+                "1. Your API key is correct in Settings (Ctrl+S)\n"
+                "2. Your internet connection is working\n"
+                "3. The API endpoint URL is correct (if using custom endpoint)\n"
+                "4. Or switch to Ollama in Settings (Ctrl+S)"
+            ),
+            "anthropic": (
+                "Cannot connect to Anthropic API. Please check:\n"
+                "1. Your API key is correct in Settings (Ctrl+S)\n"
+                "2. Your internet connection is working\n"
+                "3. Or switch to Ollama in Settings (Ctrl+S)"
+            )
+        }
+        return messages.get(provider, (
+            "Connection error. Please check your network connection and try again.\n"
+            "You can also switch providers in Settings (Ctrl+S)"
+        ))
+    
+    def _execute_query_in_thread(self, question: str) -> Dict[str, Any]:
+        """Execute query in a thread to avoid file descriptor issues."""
+        import gc
+        import os
+        
+        # Set conservative environment for the query thread
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        
+        try:
+            # Force garbage collection
+            gc.collect()
+            
+            # Use QA chain if available, otherwise fall back to manual retrieval
+            if self.qa_chain:
+                result = self._execute_qa_chain_sync(question)
+            else:
+                result = self._execute_manual_retrieval_sync(question)
+            
+            # Clean up
+            gc.collect()
+            
+            return result
+            
+        except Exception as e:
+            error_str = str(e)
+            RichLogger.warning(f"Query exception: {error_str[:200]}")
+            
+            if "fds_to_keep" in error_str:
+                return self._handle_file_descriptor_error(question)
+            else:
+                raise e
+    
+    def _execute_qa_chain_sync(self, question: str) -> Dict[str, Any]:
+        """Synchronous version of _execute_qa_chain for thread execution."""
+        result = self.qa_chain.invoke({"input": question})
+        
+        # Extract answer and source documents
+        answer_text = result.get("answer", "No answer generated")
+        source_docs = result.get("context", [])
+        
+        # Process result using shared logic
+        answer_text, source_docs = self._process_qa_result(answer_text, source_docs, question)
+        
+        RichLogger.info(f"QA chain retrieved {len(source_docs)} documents (retrieval_k={self.retrieval_k})")
+        
+        return {"response": answer_text, "context": source_docs}
+    
+    def _execute_manual_retrieval_sync(self, question: str) -> Dict[str, Any]:
+        """Synchronous version of _execute_manual_retrieval for thread execution."""
+        # Use expanded retriever if query expansion is enabled
+        retriever = self._create_expanded_retriever(self.retrieval_k)
+        
+        # Get relevant documents using shared retrieval logic
+        relevant_docs = self._perform_retrieval(retriever, question)
+        
+        if not relevant_docs:
+            return {
+                "response": "I couldn't find any relevant information in the documents to answer your question.", 
+                "context": []
+            }
+        
+        # Apply reranking if enabled
+        if self.reranker and relevant_docs:
+            relevant_docs = self._rerank_documents(question, relevant_docs)
+        
+        # Format context and create prompt
+        context = self._format_context(relevant_docs)
+        prompt = self._create_prompt(context, question)
+        
+        # Query LLM
+        response = self.llm_manager.invoke(prompt)
+        
+        return {"response": response, "context": relevant_docs}
+    
+    async def query(self, question: str) -> Dict[str, Any]:
         """Query the RAG system with better error handling and async execution"""
         if not self.vectorstore:
             return {"response": "RAG system not initialized. Load or create a database first.", "context": []}
@@ -232,207 +465,30 @@ class RAGSystem:
         try:
             # Run the query in a thread executor to avoid blocking the UI
             loop = asyncio.get_event_loop()
-
-            # Create a simple query function that avoids file descriptor issues
-            def simple_query():
-                import gc
-                import os
-
-                # Set conservative environment for the query thread
-                os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-                try:
-                    # Force garbage collection
-                    gc.collect()
-
-                    # Check if we have qa_chain first
-                    if self.qa_chain:
-                        # Use the qa_chain which should return both answer and source documents
-                        result = self.qa_chain.invoke({"input": question})
-                        
-                        # Extract answer and source documents
-                        answer_text = result.get("answer", "No answer generated")
-                        
-                        # The qa_chain returns context as a list of documents
-                        source_docs = result.get("context", [])
-                        
-                        # Apply reranking if enabled
-                        if self.reranker and source_docs:
-                            source_docs = self._rerank_documents(question, source_docs)
-                        
-                        # Try to get relevance scores using similarity search
-                        try:
-                            # Get documents with scores for better understanding
-                            docs_with_scores = self.vectorstore.similarity_search_with_score(question, k=self.retrieval_k)
-                            print(f"[INFO] Relevance scores (lower is better):")
-                            for i, (doc, score) in enumerate(docs_with_scores[:3]):
-                                preview = doc.page_content[:100].replace('\n', ' ')
-                                print(f"  Doc {i+1}: score={score:.3f} - {preview}...")
-                        except Exception as e:
-                            print(f"[yellow]⚠ Could not get relevance scores: {str(e)}[/yellow]")
-                        
-                        print(f"[INFO] QA chain retrieved {len(source_docs)} documents (retrieval_k={self.retrieval_k})")
-                        
-                        # Convert response to string if it's an object
-                        if hasattr(answer_text, 'content'):
-                            answer_text = answer_text.content
-                        else:
-                            answer_text = str(answer_text)
-                        
-                        return {"response": answer_text, "context": source_docs}
-                    
-                    # Fallback to manual retrieval if no qa_chain
-                    # Use expanded retriever if query expansion is enabled
-                    retriever = self._create_expanded_retriever(self.retrieval_k)
-
-                    # Get relevant documents - using the newer invoke method
-                    try:
-                        relevant_docs = retriever.invoke(question)
-                    except Exception as e:
-                        # Fallback to old method if invoke fails
-                        print(f"[yellow]⚠ Retriever invoke failed, using fallback: {str(e)}[/yellow]")
-                        relevant_docs = retriever.get_relevant_documents(question)
-                    
-
-                    if not relevant_docs:
-                        return {"response": "I couldn't find any relevant information in the documents to answer your question.", "context": []}
-                    
-                    # Apply reranking if enabled
-                    if self.reranker and relevant_docs:
-                        relevant_docs = self._rerank_documents(question, relevant_docs)
-
-                    # Format context
-                    context_parts = []
-                    # Use all documents after reranking (reranker already limits to reranker_top_k)
-                    for i, doc in enumerate(relevant_docs):
-                        context_parts.append(f"Document {i+1}:\n{doc.page_content}")
-                    context = "\n\n".join(context_parts)
-
-                    # Create prompt - load from system_prompt.md if available
-                    system_prompt_file = Path("system_prompt.md")
-                    if system_prompt_file.exists():
-                        try:
-                            with open(system_prompt_file, 'r', encoding='utf-8') as f:
-                                system_prompt_template = f.read()
-                            # Replace context placeholder
-                            system_prompt_with_context = system_prompt_template.replace("{context}", context)
-                            prompt = f"{system_prompt_with_context}\n\nQuestion: {question}\n\nAnswer:"
-                        except Exception as e:
-                            # Fallback prompt
-                            print(f"[yellow]⚠ Could not load system prompt: {str(e)}[/yellow]")
-                            prompt = f"""You are a helpful assistant. Based on the following context, please provide a comprehensive answer to the question. If the answer is not in the context, say so.
-
-Context:
-{context}
-
-Question: {question}
-
-Answer:"""
-                    else:
-                        # Default fallback prompt without length restrictions
-                        prompt = f"""You are a helpful assistant. Based on the following context, please provide a comprehensive answer to the question. If the answer is not in the context, say so.
-
-Context:
-{context}
-
-Question: {question}
-
-Answer:"""
-
-                    # Query LLM with timeout protection
-                    response = self.llm_manager.invoke(prompt)
-                    
-                    # Clean up
-                    gc.collect()
-
-                    # Return both response and context for display
-                    return {"response": response, "context": relevant_docs}
-
-                except Exception as e:
-                    # Handle specific errors
-                    error_str = str(e)
-                    print(f"[WARNING] Query exception: {error_str[:200]}")
-                    
-                    if "fds_to_keep" in error_str:
-                        # Try a minimal query without retriever
-                        print("[WARNING] Falling back to simple query without retrieval due to file descriptor error")
-                        try:
-                            simple_prompt = f"Question: {question}\n\nPlease provide a helpful response based on general knowledge."
-                            response = self.llm_manager.invoke(simple_prompt)
-                            return {"response": response, "context": []}
-                        except Exception:
-                            return {"response": "System resource error. Please restart the RAG system (Ctrl+Shift+R).", "context": []}
-                    else:
-                        raise e
-
-            # Execute in thread pool
-            result = await loop.run_in_executor(None, simple_query)
+            
+            # Execute query in thread pool
+            result = await loop.run_in_executor(None, self._execute_query_in_thread, question)
             return result
 
         except Exception as e:
-            error_msg = str(e)
-
-            # Get current provider for provider-specific error messages
-            current_provider = "ollama"  # Default
-            if self.settings_manager:
-                current_provider = self.settings_manager.get("llm_provider", "ollama")
-
-            # Provide specific guidance for common errors
-            if "fds_to_keep" in error_msg or "Bad file descriptor" in error_msg:
-                return {"response": (
-                    "I encountered a system resource error. Please try:\n"
-                    "1. Press Ctrl+Shift+R to restart the RAG system\n"
-                    "2. Reduce chunk size in settings (Ctrl+S)\n"
-                    "3. Restart the application"
-                ), "context": []}
-            elif "connection" in error_msg.lower() or "timeout" in error_msg.lower():
-                # Provider-specific connection error messages
-                if current_provider == "ollama":
-                    return {"response": (
-                        "Cannot connect to Ollama. You can:\n"
-                        "1. Start Ollama (run 'ollama serve' in terminal)\n"
-                        "2. Install the model (run 'ollama pull llama3.2')\n"
-                        "3. Or switch to an API provider in Settings (Ctrl+S)"
-                    ), "context": []}
-                elif current_provider == "openai":
-                    return {"response": (
-                        "Cannot connect to OpenAI API. Please check:\n"
-                        "1. Your API key is correct in Settings (Ctrl+S)\n"
-                        "2. Your internet connection is working\n"
-                        "3. The API endpoint URL is correct (if using custom endpoint)\n"
-                        "4. Or switch to Ollama in Settings (Ctrl+S)"
-                    ), "context": []}
-                elif current_provider == "anthropic":
-                    return {"response": (
-                        "Cannot connect to Anthropic API. Please check:\n"
-                        "1. Your API key is correct in Settings (Ctrl+S)\n"
-                        "2. Your internet connection is working\n"
-                        "3. Or switch to Ollama in Settings (Ctrl+S)"
-                    ), "context": []}
-                else:
-                    return {"response": (
-                        "Connection error. Please check your network connection and try again.\n"
-                        "You can also switch providers in Settings (Ctrl+S)"
-                    ), "context": []}
-            elif "api_key" in error_msg.lower() or "authentication" in error_msg.lower():
-                if current_provider in ["openai", "anthropic"]:
-                    return {"response": (
-                        f"API authentication error for {current_provider.title()}. Please:\n"
-                        "1. Check your API key in Settings (Ctrl+S)\n"
-                        "2. Ensure your API key is valid and has sufficient credits\n"
-                        "3. Or switch to Ollama in Settings (Ctrl+S)"
-                    ), "context": []}
-                else:
-                    return {"response": f"Authentication error: {error_msg}", "context": []}
-            elif "ollama" in error_msg.lower():
-                # Specific Ollama errors even when using other providers
-                return {"response": (
-                    "Ollama-related error detected. You can:\n"
-                    "1. Switch to an API provider in Settings (Ctrl+S)\n"
-                    "2. Or fix Ollama: start service and install models"
-                ), "context": []}
-            else:
-                return {"response": f"Error: {error_msg}", "context": []}
+            return self._handle_query_error(e)
+    
+    def _handle_query_error(self, error: Exception) -> Dict[str, Any]:
+        """Handle query errors with appropriate messages."""
+        # Update error handler with current model
+        self.error_handler.model_name = self.model_name
+        
+        # Get structured error information
+        error_info = self.error_handler.handle_error(error)
+        
+        # Format error for user
+        user_message = self.error_handler.format_error_for_user(error_info)
+        
+        return {
+            "response": user_message,
+            "context": [],
+            "error_info": error_info
+        }
 
     def get_stats(self):
         """Get database statistics"""

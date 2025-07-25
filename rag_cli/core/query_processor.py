@@ -1,0 +1,233 @@
+"""Query processing utilities for RAG system"""
+
+from typing import List, Optional, Any
+from langchain_core.documents import Document
+
+from rag_cli.utils.logger import RichLogger
+
+
+class QueryProcessor:
+    """Handles query expansion, reranking, and processing"""
+    
+    def __init__(self, settings_manager: Any = None):
+        self.settings_manager = settings_manager
+    
+    def expand_query(self, query: str, expansion_llm: Any) -> str:
+        """
+        Expand a query using an LLM for better retrieval
+        
+        Args:
+            query: Original query
+            expansion_llm: LLM to use for expansion
+            
+        Returns:
+            Expanded query
+        """
+        if not expansion_llm:
+            return query
+            
+        try:
+            expansion_prompt = f"""You are a helpful assistant that expands queries to improve document retrieval.
+Given a query, expand it by adding relevant keywords, synonyms, and related concepts.
+Keep the expansion concise and relevant.
+
+Original query: {query}
+Expanded query:"""
+            
+            expanded = expansion_llm.invoke(expansion_prompt).strip()
+            
+            # Combine original and expanded query
+            if expanded and expanded != query:
+                combined = f"{query} {expanded}"
+                RichLogger.info(f"Query expanded from '{query}' to '{combined}'")
+                return combined
+            
+            return query
+            
+        except Exception as e:
+            RichLogger.warning(f"Query expansion failed: {str(e)}")
+            return query
+    
+    def format_context(self, documents: List[Document]) -> str:
+        """
+        Format retrieved documents into a context string
+        
+        Args:
+            documents: List of retrieved documents
+            
+        Returns:
+            Formatted context string
+        """
+        if not documents:
+            return ""
+        
+        context_parts = []
+        
+        for i, doc in enumerate(documents):
+            # Add document separator
+            context_parts.append(f"[Document {i+1}]")
+            
+            # Add content
+            content = doc.page_content.strip()
+            context_parts.append(content)
+            
+            # Add metadata if available
+            if hasattr(doc, 'metadata') and doc.metadata:
+                metadata_str = self._format_metadata(doc.metadata)
+                if metadata_str:
+                    context_parts.append(f"Metadata: {metadata_str}")
+            
+            # Add blank line between documents
+            context_parts.append("")
+        
+        return "\n".join(context_parts).strip()
+    
+    def _format_metadata(self, metadata: dict) -> str:
+        """Format document metadata for display"""
+        relevant_keys = ['source', 'page', 'chunk_id']
+        formatted = []
+        
+        for key in relevant_keys:
+            if key in metadata:
+                formatted.append(f"{key}={metadata[key]}")
+        
+        return ", ".join(formatted)
+    
+    def create_rag_prompt(
+        self,
+        query: str,
+        context: str,
+        system_prompt: Optional[str] = None
+    ) -> str:
+        """
+        Create a prompt for RAG with context
+        
+        Args:
+            query: User query
+            context: Retrieved context
+            system_prompt: Optional system prompt
+            
+        Returns:
+            Formatted prompt
+        """
+        if not system_prompt:
+            system_prompt = """You are a helpful AI assistant. Use the provided context to answer questions accurately.
+If the answer cannot be found in the context, say so clearly."""
+        
+        prompt = f"""{system_prompt}
+
+Context information is below:
+---------------------
+{context}
+---------------------
+
+Given the context information and not prior knowledge, answer the query.
+Query: {query}
+Answer: """
+        
+        return prompt
+    
+    def log_relevance_scores(self, documents: List[Document]) -> None:
+        """
+        Log relevance scores for retrieved documents
+        
+        Args:
+            documents: Retrieved documents with scores
+        """
+        if not documents:
+            return
+        
+        for i, doc in enumerate(documents):
+            if hasattr(doc, 'metadata') and 'score' in doc.metadata:
+                score = doc.metadata['score']
+                preview = doc.page_content[:100].replace('\n', ' ')
+                if len(doc.page_content) > 100:
+                    preview += "..."
+                
+                RichLogger.debug(f"Doc {i+1} relevance: {score:.3f} - {preview}")
+    
+    def filter_documents_by_score(
+        self,
+        documents: List[Document],
+        min_score: float = 0.5
+    ) -> List[Document]:
+        """
+        Filter documents by relevance score
+        
+        Args:
+            documents: Documents to filter
+            min_score: Minimum relevance score
+            
+        Returns:
+            Filtered documents
+        """
+        filtered = []
+        
+        for doc in documents:
+            if hasattr(doc, 'metadata') and 'score' in doc.metadata:
+                if doc.metadata['score'] >= min_score:
+                    filtered.append(doc)
+            else:
+                # Include documents without scores
+                filtered.append(doc)
+        
+        if len(filtered) < len(documents):
+            RichLogger.info(
+                f"Filtered {len(documents) - len(filtered)} documents below score threshold {min_score}"
+            )
+        
+        return filtered
+    
+    def deduplicate_documents(
+        self,
+        documents: List[Document],
+        similarity_threshold: float = 0.9
+    ) -> List[Document]:
+        """
+        Remove duplicate or highly similar documents
+        
+        Args:
+            documents: Documents to deduplicate
+            similarity_threshold: Similarity threshold for deduplication
+            
+        Returns:
+            Deduplicated documents
+        """
+        if len(documents) <= 1:
+            return documents
+        
+        unique_docs = [documents[0]]
+        
+        for doc in documents[1:]:
+            is_duplicate = False
+            
+            for unique_doc in unique_docs:
+                # Simple content-based deduplication
+                if self._calculate_similarity(doc.page_content, unique_doc.page_content) > similarity_threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                unique_docs.append(doc)
+        
+        if len(unique_docs) < len(documents):
+            RichLogger.info(
+                f"Removed {len(documents) - len(unique_docs)} duplicate documents"
+            )
+        
+        return unique_docs
+    
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
+        """Calculate simple text similarity (Jaccard similarity)"""
+        # Convert to sets of words
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        
+        # Calculate Jaccard similarity
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        if not union:
+            return 0.0
+        
+        return len(intersection) / len(union)

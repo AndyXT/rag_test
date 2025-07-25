@@ -3,6 +3,8 @@ import os
 import json
 from typing import Dict, Any
 
+from rag_cli.utils.logger import RichLogger
+
 
 class SettingsManager:
     """Manages application settings with persistence"""
@@ -51,7 +53,7 @@ class SettingsManager:
             TypeError,
             AttributeError,
         ) as e:
-            print(f"Warning: Could not load settings from {self.settings_file}: {e}")
+            RichLogger.warning(f"Could not load settings from {self.settings_file}: {e}")
             pass
         return self.default_settings.copy()
 
@@ -64,7 +66,7 @@ class SettingsManager:
                 json.dump(self.settings, f, indent=2)
             return True
         except (IOError, OSError, PermissionError, TypeError) as e:
-            print(f"Warning: Could not save settings to {self.settings_file}: {e}")
+            RichLogger.warning(f"Could not save settings to {self.settings_file}: {e}")
             return False
 
     def get(self, key: str, default=None) -> Any:
