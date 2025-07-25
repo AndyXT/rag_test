@@ -48,6 +48,48 @@ Expanded query:"""
             RichLogger.warning(f"Query expansion failed: {str(e)}")
             return query
     
+    def refine_query(self, query: str, refinement_llm: Any) -> str:
+        """
+        Refine a query using an LLM to improve clarity and retrieval effectiveness
+        
+        Args:
+            query: Original user query
+            refinement_llm: LLM to use for refinement
+            
+        Returns:
+            Refined query
+        """
+        if not refinement_llm:
+            return query
+            
+        try:
+            refinement_prompt = f"""You are an expert at reformulating questions for better information retrieval.
+Your task is to take a user's question and rewrite it to be more clear, specific, and effective for searching technical documentation.
+
+Guidelines:
+- Keep the core intent of the question
+- Add relevant technical terms if they seem implied
+- Make vague questions more specific
+- Fix grammar or clarity issues
+- Keep it concise (one sentence if possible)
+- Don't add unnecessary context
+
+User's question: {query}
+Improved question:"""
+            
+            refined = refinement_llm.invoke(refinement_prompt).strip()
+            
+            # Use refined query if it's meaningfully different
+            if refined and refined != query and len(refined) > 5:
+                RichLogger.info(f"Query refined from '{query}' to '{refined}'")
+                return refined
+            
+            return query
+            
+        except Exception as e:
+            RichLogger.warning(f"Query refinement failed: {str(e)}")
+            return query
+    
     def format_context(self, documents: List[Document]) -> str:
         """
         Format retrieved documents into a context string

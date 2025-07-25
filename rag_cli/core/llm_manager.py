@@ -156,7 +156,7 @@ class LLMManager:
                 model=query_expansion_model,
                 temperature=0.3,  # Low temperature for consistent expansions
                 num_ctx=512,  # Small context window for query expansion
-                keep_alive="1m",  # Unload quickly after use
+                keep_alive="0s",  # Unload immediately after use to free memory
             )
             RichLogger.success("Query expansion LLM initialized successfully")
         except Exception as e:

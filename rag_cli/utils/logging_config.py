@@ -182,7 +182,9 @@ class LoggingConfig:
             exception: Exception to log
             message: Error message
         """
-        logger.error(f"{message}: {type(exception).__name__}: {str(exception)}", exc_info=True)
+        from rag_cli.utils.error_utils import ErrorUtils
+        formatted_msg = ErrorUtils.format_error_message(message, exception)
+        logger.error(formatted_msg, exc_info=True)
     
     @staticmethod
     def create_session_logger(
@@ -249,10 +251,10 @@ class LoggerMixin:
     
     def log_error(self, message: str, exception: Optional[Exception] = None, **kwargs) -> None:
         """Log error message"""
-        if exception:
-            self.logger.error(f"{message}: {type(exception).__name__}: {str(exception)}", exc_info=True, **kwargs)
-        else:
-            self.logger.error(message, **kwargs)
+        from rag_cli.utils.error_utils import ErrorUtils
+        
+        formatted_msg = ErrorUtils.format_error_message(message, exception)
+        self.logger.error(formatted_msg, exc_info=bool(exception), **kwargs)
     
     def log_critical(self, message: str, **kwargs) -> None:
         """Log critical message"""

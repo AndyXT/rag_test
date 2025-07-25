@@ -27,8 +27,21 @@ class RAGService:
         # Initialize settings
         self.settings_manager = SettingsManager(settings_file)
         
-        # Initialize core system
-        self.rag_system = RAGSystem(settings_manager=self.settings_manager)
+        # Get model settings early
+        model_name = self.settings_manager.get("ollama_model", 
+                     self.settings_manager.get("model_name", DEFAULT_MODEL))
+        temperature = self.settings_manager.get("temperature", DEFAULT_TEMPERATURE)
+        chunk_size = self.settings_manager.get("chunk_size", DEFAULT_CHUNK_SIZE)
+        chunk_overlap = self.settings_manager.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP)
+        
+        # Initialize core system with correct model
+        self.rag_system = RAGSystem(
+            model_name=model_name,
+            temperature=temperature,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            settings_manager=self.settings_manager
+        )
         
         # Initialize services
         self.query_service = QueryService(self.rag_system)
@@ -44,9 +57,12 @@ class RAGService:
     def _initialize(self) -> None:
         """Initialize the RAG system with current settings"""
         try:
-            # Get settings
+            # Get settings - handle both model_name and ollama_model for compatibility
+            model_name = self.settings_manager.get("ollama_model", 
+                         self.settings_manager.get("model_name", DEFAULT_MODEL))
+            
             settings = {
-                "model_name": self.settings_manager.get("model_name", DEFAULT_MODEL),
+                "model_name": model_name,
                 "temperature": self.settings_manager.get("temperature", DEFAULT_TEMPERATURE),
                 "chunk_size": self.settings_manager.get("chunk_size", DEFAULT_CHUNK_SIZE),
                 "chunk_overlap": self.settings_manager.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP)
@@ -173,9 +189,20 @@ class RAGService:
     
     def get_system_info(self) -> Dict[str, Any]:
         """Get comprehensive system information"""
+        # Get the actual model name based on provider
+        provider = self.settings_manager.get("llm_provider", "ollama")
+        if provider == "ollama":
+            model_name = self.settings_manager.get("ollama_model", DEFAULT_MODEL)
+        elif provider == "openai":
+            model_name = self.settings_manager.get("openai_model", "gpt-3.5-turbo")
+        elif provider == "anthropic":
+            model_name = self.settings_manager.get("anthropic_model", "claude-3-haiku-20240307")
+        else:
+            model_name = self.settings_manager.get("model_name", DEFAULT_MODEL)
+            
         return {
             "settings": {
-                "model": self.settings_manager.get("model_name", DEFAULT_MODEL),
+                "model": model_name,
                 "temperature": self.settings_manager.get("temperature", DEFAULT_TEMPERATURE),
                 "chunk_size": self.settings_manager.get("chunk_size", DEFAULT_CHUNK_SIZE),
                 "chunk_overlap": self.settings_manager.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP),

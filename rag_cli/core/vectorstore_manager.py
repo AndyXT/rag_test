@@ -29,26 +29,36 @@ class VectorStoreManager:
         self.chunk_size = DEFAULT_CHUNK_SIZE
         self.chunk_overlap = DEFAULT_CHUNK_OVERLAP
         
-        # Initialize focused managers
+        # Initialize embeddings and chroma managers only
         self.embeddings_manager = EmbeddingsManager(settings_manager)
-        self.cache_manager = CacheManager()
-        self.pdf_processor = PDFProcessor()
         self.chroma_manager = ChromaManager()
         self.reranker_manager = RerankerManager(settings_manager)
-
-    def initialize(self, chunk_size: int = DEFAULT_CHUNK_SIZE, chunk_overlap: int = DEFAULT_CHUNK_OVERLAP) -> None:
-        """Initialize the vector store manager"""
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
         
-        # Check and increase file descriptor limit before initialization
+        # Document processing will be handled separately
+        from rag_cli.core.document_processor import DocumentProcessor
+        self.document_processor = DocumentProcessor(
+            PDFProcessor(),
+            self.embeddings_manager,
+            CacheManager(),
+            self.chunk_size,
+            self.chunk_overlap
+        )
+
+    def initialize(self, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None) -> None:
+        """Initialize or update settings"""
+        if chunk_size is not None:
+            self.chunk_size = chunk_size
+        if chunk_overlap is not None:
+            self.chunk_overlap = chunk_overlap
+            
+        # Update document processor settings
+        self.document_processor.update_chunk_settings(self.chunk_size, self.chunk_overlap)
+        
+        # Check and increase file descriptor limit
         self._check_and_increase_fd_limit()
         
-        # Initialize embeddings using the focused manager
+        # Initialize embeddings
         self.embeddings_manager.initialize()
-        
-        # Initialize reranker if enabled
-        self.reranker_manager.initialize()
 
     def _check_and_increase_fd_limit(self) -> None:
         """Check and try to increase file descriptor limit"""
@@ -74,7 +84,8 @@ class VectorStoreManager:
         """Load existing ChromaDB with modern configuration"""
         # Clean HF cache before loading to prevent embedding issues
         RichLogger.info("Cleaning HuggingFace cache before loading database...")
-        self.cache_manager.clean_hf_cache_locks(aggressive=True)
+        cache_manager = CacheManager()
+        cache_manager.clean_hf_cache_locks(aggressive=True)
 
         # Set environment variables for ChromaDB (modern approach)
         os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -90,42 +101,28 @@ class VectorStoreManager:
     def create_db_from_docs(
         self, docs_path: str = "./documents", db_path: str = "./chroma_db", progress_callback=None
     ):
-        """Create new ChromaDB from documents with robust error handling and file descriptor management"""
+        """Create new ChromaDB from documents with robust error handling"""
         try:
             self._setup_environment()
             
-            # Validate and get PDF files
-            _, pdf_files = self.pdf_processor.validate_pdf_directory(docs_path)
+            if progress_callback:
+                progress_callback("Processing documents...")
+            
+            # Use document processor to handle all document operations
+            all_documents = self.document_processor.process_documents(docs_path, progress_callback)
             
             if progress_callback:
-                progress_callback(f"Found {len(pdf_files)} PDF files...")
-            
-            # Process PDFs using the PDF processor
-            all_documents = self.pdf_processor.process_pdfs(pdf_files, progress_callback)
-            
-            # Get processing summary
-            summary = self.pdf_processor.get_processing_summary()
-            
-            if progress_callback:
-                msg = f"Successfully loaded {summary['success_count']} files"
-                if summary['failure_count'] > 0:
-                    msg += f" ({summary['failure_count']} failed)"
-                progress_callback(msg)
-            
-            # Split documents
-            texts = self._split_documents(all_documents, progress_callback)
-            
-            if progress_callback:
-                progress_callback(f"Creating embeddings for {len(texts)} chunks...")
+                progress_callback(f"Creating embeddings for {len(all_documents)} chunks...")
             
             # Get embeddings
             embeddings = self.embeddings_manager.get_embeddings()
             
             # Create database using chroma manager
-            self.chroma_manager.create_database(texts, embeddings, db_path)
+            self.chroma_manager.create_database(all_documents, embeddings, db_path)
             
             # Report success
-            self._report_success(texts, pdf_files, progress_callback)
+            if progress_callback:
+                progress_callback(f"Successfully created database with {len(all_documents)} chunks")
 
         except Exception as e:
             # Force cleanup on error
@@ -139,33 +136,6 @@ class VectorStoreManager:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
         os.environ["OMP_NUM_THREADS"] = "1"
-
-    def _split_documents(self, all_documents, progress_callback):
-        """Split documents into chunks"""
-        if progress_callback:
-            progress_callback(f"Splitting {len(all_documents)} documents...")
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
-        )
-        texts = text_splitter.split_documents(all_documents)
-
-        # Clear large document list to free memory
-        del all_documents
-        gc.collect()
-
-        return texts
-
-    def _report_success(self, texts, _, progress_callback):
-        """Report successful database creation"""
-        summary = self.pdf_processor.get_processing_summary()
-        
-        success_msg = f"Database created with {len(texts)} chunks from {summary['success_count']} files"
-        if summary['failure_count'] > 0:
-            success_msg += f" ({summary['failure_count']} files skipped due to errors)"
-
-        if progress_callback:
-            progress_callback(success_msg)
 
     def rerank_documents(self, query: str, documents: List[Document]) -> List[Document]:
         """Rerank documents using the cross-encoder model"""

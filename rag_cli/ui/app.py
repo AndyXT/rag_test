@@ -418,11 +418,24 @@ class RAGChatApp(App):
 
     async def _create_database(self):
         """Create database with enhanced progress tracking"""
+        from rag_cli.services.document_service import DocumentService
+        
         chat = self.query_one("#chat", RichLog)
         self.processing = True
 
         try:
+            # Validate documents directory
             pdf_files = await self._validate_documents_directory()
+            
+            # Show estimated processing time
+            _, time_str = DocumentService.estimate_processing_time(pdf_files)
+            self.add_message("info", f"Estimated processing time: {time_str}")
+            
+            # Check disk space
+            has_space, space_msg = DocumentService.check_disk_space("./chroma_db")
+            if not has_space:
+                raise ValueError(space_msg)
+                
             await self._create_database_with_progress(pdf_files, chat)
         except Exception as e:
             await self._handle_database_creation_error(e, chat)
@@ -432,17 +445,13 @@ class RAGChatApp(App):
 
     async def _validate_documents_directory(self):
         """Validate documents directory and return PDF files"""
-        docs_path = Path("./documents")
-        if not docs_path.exists():
-            raise ValueError(
-                "Documents directory './documents' not found. Please create it and add PDF files."
-            )
+        from rag_cli.services.document_service import DocumentService
         
-        pdf_files = list(docs_path.glob("**/*.pdf"))
-        if not pdf_files:
-            raise ValueError(
-                "No PDF files found in './documents' directory. Please add some PDF files."
-            )
+        is_valid, message, pdf_files = DocumentService.validate_documents_directory("./documents")
+        
+        if not is_valid:
+            raise ValueError(message)
+        
         return pdf_files
 
     async def _create_database_with_progress(self, pdf_files, chat):
@@ -550,128 +559,147 @@ class RAGChatApp(App):
             "[yellow]💡 Check if your PDF files are corrupted or password-protected.[/yellow]"
         )
 
-    async def _process_question(self, question: str) -> None:
-        """Process user question with enhanced UI feedback."""
+    async def _validate_question(self, question: str, chat) -> bool:
+        """Validate question and system state."""
         if not question.strip():
-            return
-
-        chat = self.query_one("#chat", RichLog)
-
-        # Display user question with timestamp
+            return False
+            
+        if not self.rag_service.rag_system.vectorstore:
+            chat.write("[red]⚠️ Please load or create a database first.[/red]")
+            return False
+            
+        return True
+    
+    def _display_user_question(self, question: str, chat) -> str:
+        """Display user question with timestamp."""
         timestamp = datetime.now().strftime("%H:%M:%S")
         user_panel = Panel(
             question, title=f"👤 You [{timestamp}]", border_style="blue", padding=(0, 1)
         )
         chat.write(user_panel)
-
+        
         # Store the question for copying
         self.chat_messages.append(
             {"type": "user", "content": question, "timestamp": timestamp}
         )
-
-        if not self.rag_service.rag_system.vectorstore:
-            chat.write("[red]⚠️ Please load or create a database first.[/red]")
+        
+        return timestamp
+    
+    async def _execute_query(self, question: str) -> dict:
+        """Execute the query with timeout."""
+        try:
+            result = await asyncio.wait_for(
+                self.rag_service.query_service.process_query(question), 
+                timeout=60.0
+            )
+            return result
+        except asyncio.TimeoutError:
+            raise Exception("Query timed out after 60 seconds. Try disabling query expansion or reranking in settings.")
+    
+    def _display_context(self, context_docs: list, chat) -> None:
+        """Display context documents if enabled."""
+        show_context = self.settings_manager.get("show_context", False)
+        
+        if not show_context or not context_docs:
             return
+            
+        try:
+            context_content = []
+            for i, doc in enumerate(context_docs):
+                doc_content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+                # Truncate long content for display
+                if len(doc_content) > 500:
+                    doc_content = doc_content[:500] + "..."
+                context_content.append(f"[bold]Document {i+1}:[/bold]\n{doc_content}")
+            
+            if context_content:
+                context_text = "\n\n".join(context_content)
+                context_panel = Panel(
+                    context_text,
+                    title=f"📚 Retrieved Context ({len(context_docs)} documents)",
+                    border_style="cyan",
+                    padding=(1, 1),
+                )
+                chat.write(context_panel)
+        except Exception as e:
+            chat.write(f"[red]Error displaying context: {str(e)}[/red]")
+    
+    def _display_answer(self, answer: str, response_time: float, chat) -> None:
+        """Display the assistant's answer."""
+        assistant_panel = Panel(
+            answer,
+            title=f"🤖 Assistant [{response_time:.1f}s]",
+            border_style="green",
+            padding=(0, 1),
+        )
+        chat.write(assistant_panel)
+        
+        # Store the answer for copying
+        self.chat_messages.append(
+            {
+                "type": "assistant",
+                "content": answer,
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+            }
+        )
+    
+    async def _handle_query_error(self, error: Exception, chat) -> None:
+        """Handle and display query errors."""
+        error_panel = Panel(
+            f"Sorry, I encountered an error: {str(error)}",
+            title="❌ Error",
+            border_style="red",
+            padding=(0, 1),
+        )
+        chat.write(error_panel)
+        self.update_progress(f"❌ Error: {str(error)}")
 
+    async def _process_question(self, question: str) -> None:
+        """Process user question with enhanced UI feedback."""
+        chat = self.query_one("#chat", RichLog)
+        
+        # Validate question and system state
+        if not await self._validate_question(question, chat):
+            return
+        
+        # Display user question
+        timestamp = self._display_user_question(question, chat)
+        
+        # Update UI state
         self.processing = True
         self.update_progress("🤔 Thinking...", 50)
-
+        
         # Add to history
         history_content = self.query_one("#history-content", RichLog)
         history_content.write(f"[dim]{timestamp}[/dim] {question[:50]}...")
-
+        
         try:
-            # Show animated thinking indicator
+            # Show processing indicator
             chat.write("[dim]🧠 Processing your question...[/dim]")
-
+            
+            # Execute query
             start_time = time.time()
-            
-            # Add timeout to prevent infinite hanging
-            try:
-                result = await asyncio.wait_for(
-                    self.rag_service.query_service.process_query(question), 
-                    timeout=60.0
-                )
-            except asyncio.TimeoutError:
-                chat.write("[red]✗ Query timed out after 60 seconds. Try disabling query expansion or reranking in settings.[/red]")
-                self.processing = False
-                self.update_progress("", 0)
-                return
-            
+            result = await self._execute_query(question)
             response_time = time.time() - start_time
-
-            # Extract response and context from result
-            if isinstance(result, dict):
-                answer = result.get("response", "No response")
-                context_docs = result.get("context", [])
-            else:
-                # Backward compatibility if something returns a string
-                answer = str(result)
-                context_docs = []
-
-            # Clear the thinking indicator
-            # Note: RichLog doesn't support removing specific messages, so we'll just add the response
-
-            # Check if we should show context
-            show_context = self.settings_manager.get("show_context", False)
             
-            # Display context if enabled and available
-            if show_context and context_docs:
-                try:
-                    context_content = []
-                    for i, doc in enumerate(context_docs):
-                        doc_content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
-                        # Truncate long content for display
-                        if len(doc_content) > 500:
-                            doc_content = doc_content[:500] + "..."
-                        context_content.append(f"[bold]Document {i+1}:[/bold]\n{doc_content}")
-                    
-                    if context_content:
-                        context_text = "\n\n".join(context_content)
-                        context_panel = Panel(
-                            context_text,
-                            title=f"📚 Retrieved Context ({len(context_docs)} documents)",
-                            border_style="cyan",
-                            padding=(1, 1),
-                        )
-                        chat.write(context_panel)
-                except Exception as e:
-                    chat.write(f"[red]Error displaying context: {str(e)}[/red]")
-
-            # Display the answer
-            assistant_panel = Panel(
-                answer,
-                title=f"🤖 Assistant [{response_time:.1f}s]",
-                border_style="green",
-                padding=(0, 1),
-            )
-            chat.write(assistant_panel)
-
-            # Store the answer for copying
-            self.chat_messages.append(
-                {
-                    "type": "assistant",
-                    "content": answer,
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
-                }
-            )
-
-            # Add to chat history
+            # Extract response and context
+            answer = result.get("response", "No response") if isinstance(result, dict) else str(result)
+            context_docs = result.get("context", []) if isinstance(result, dict) else []
+            
+            # Display context if enabled
+            self._display_context(context_docs, chat)
+            
+            # Display answer
+            self._display_answer(answer, response_time, chat)
+            
+            # Update chat history
             self.chat_history.add_exchange(question, answer)
-
             self.update_progress("✅ Response generated", 100)
-
+            
         except Exception as e:
-            error_panel = Panel(
-                f"Sorry, I encountered an error: {str(e)}",
-                title="❌ Error",
-                border_style="red",
-                padding=(0, 1),
-            )
-            chat.write(error_panel)
-            self.update_progress(f"❌ Error: {str(e)}")
+            await self._handle_query_error(e, chat)
         finally:
-            # Always reset processing state
+            # Reset UI state
             await asyncio.sleep(1)
             self.processing = False
             self.update_progress("", 0)

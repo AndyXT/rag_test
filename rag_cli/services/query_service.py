@@ -84,30 +84,66 @@ class QueryService:
     def _execute_rag_sync(self, question: str) -> Dict[str, Any]:
         """Synchronous RAG execution"""
         try:
-            # Expand query if enabled
-            expanded_query = self._expand_query_if_enabled(question)
-            
-            # Get retrieval settings
-            retrieval_k = self.rag_system.settings_manager.get("retrieval_k", DEFAULT_RETRIEVAL_K)
-            
-            # Perform retrieval
-            docs = self.rag_system.vectorstore.similarity_search(
-                expanded_query, 
-                k=retrieval_k
-            )
-            
-            # Rerank documents if enabled
-            docs = self._rerank_if_enabled(expanded_query, docs)
-            
-            # Format context
-            context = self._format_retrieved_context(docs)
-            
-            # Create prompt and get response
-            prompt = self._create_rag_prompt(question, context)
-            response = self.rag_system.llm.invoke(prompt)
-            
-            # Process and return result
-            return self._process_rag_result(response, docs, context)
+            # Use the QA chain if available (which includes ExpandedRetriever)
+            if self.rag_system.qa_chain:
+                # Use the QA chain which handles retrieval internally
+                result = self.rag_system.qa_chain.invoke({"input": question})
+                
+                # Extract documents from the result
+                docs = result.get("context", []) if isinstance(result, dict) else []
+                
+                # Extract documents from the chain result
+                if isinstance(result, dict) and "context" in result:
+                    # The retrieval chain returns documents in 'context'
+                    docs = result.get("context", [])
+                else:
+                    docs = []
+                
+                # Get the answer text
+                answer_text = result.get("answer", "") if isinstance(result, dict) else str(result)
+                
+                # Format the response to match UI expectations
+                return {
+                    "response": answer_text,  # UI expects 'response' not 'answer'
+                    "answer": answer_text,    # Keep for backward compatibility
+                    "context": docs,          # UI expects 'context' not 'source_documents'
+                    "source_documents": docs, # Keep for backward compatibility
+                    "method": "rag",
+                    "metadata": {
+                        "model": self.rag_system.model_name,
+                        "temperature": self.rag_system.temperature,
+                        "retrieval_k": len(docs),
+                        "reranking_used": self.rag_system.settings_manager.get("use_reranker", False),
+                        "query_expansion_used": self.rag_system.settings_manager.get("use_query_expansion", False),
+                        "query_refinement_used": self.rag_system.settings_manager.get("use_query_refinement", False)
+                    }
+                }
+            else:
+                # Fallback to direct retrieval if no QA chain
+                # Expand query if enabled
+                expanded_query = self._expand_query_if_enabled(question)
+                
+                # Get retrieval settings
+                retrieval_k = self.rag_system.settings_manager.get("retrieval_k", DEFAULT_RETRIEVAL_K)
+                
+                # Perform retrieval
+                docs = self.rag_system.vectorstore.similarity_search(
+                    expanded_query, 
+                    k=retrieval_k
+                )
+                
+                # Rerank documents if enabled
+                docs = self._rerank_if_enabled(expanded_query, docs)
+                
+                # Format context
+                context = self._format_retrieved_context(docs)
+                
+                # Create prompt and get response
+                prompt = self._create_rag_prompt(question, context)
+                response = self.rag_system.llm.invoke(prompt)
+                
+                # Process and return result
+                return self._process_rag_result(response, docs, context)
             
         except Exception as e:
             RichLogger.error(f"RAG execution error: {str(e)}")
@@ -131,9 +167,11 @@ class QueryService:
             response = self.rag_system.llm.invoke(question)
             
             return {
+                "response": response,      # UI expects 'response'
                 "answer": response,
+                "context": [],             # UI expects 'context'
                 "source_documents": [],
-                "context": None,
+                "context_text": None,
                 "method": "direct",
                 "metadata": {
                     "model": self.rag_system.model_name,
@@ -145,14 +183,18 @@ class QueryService:
             raise
     
     def _expand_query_if_enabled(self, query: str) -> str:
-        """Expand query if query expansion is enabled"""
-        if not self.rag_system.settings_manager.get("use_query_expansion", False):
-            return query
+        """Expand or refine query based on settings"""
+        # Check if query refinement is enabled (preferred over expansion)
+        if self.rag_system.settings_manager.get("use_query_refinement", False):
+            if self.rag_system.query_expansion_llm:  # Same LLM used for refinement
+                return self.query_processor.refine_query(query, self.rag_system.query_expansion_llm)
+        
+        # Otherwise check if query expansion is enabled
+        elif self.rag_system.settings_manager.get("use_query_expansion", False):
+            if self.rag_system.query_expansion_llm:
+                return self.query_processor.expand_query(query, self.rag_system.query_expansion_llm)
             
-        if not self.rag_system.query_expansion_llm:
-            return query
-            
-        return self.query_processor.expand_query(query, self.rag_system.query_expansion_llm)
+        return query
     
     def _rerank_if_enabled(
         self, 
@@ -197,9 +239,11 @@ class QueryService:
         self._log_relevance_scores(docs)
         
         return {
-            "answer": response,
-            "source_documents": docs,
-            "context": context,
+            "response": response,      # UI expects 'response'
+            "answer": response,        # Keep for backward compatibility
+            "context": docs,           # UI expects 'context' with Document objects
+            "source_documents": docs,  # Keep for backward compatibility
+            "context_text": context,   # Formatted text version of context
             "method": "rag",
             "metadata": {
                 "model": self.rag_system.model_name,
@@ -226,9 +270,11 @@ class QueryService:
         user_message = self.error_handler.format_error_for_user(error_info)
         
         return {
+            "response": user_message,      # UI expects 'response'
             "answer": user_message,
+            "context": [],                 # UI expects 'context'
             "source_documents": [],
-            "context": None,
+            "context_text": None,
             "method": "error",
             "metadata": {
                 "error": str(error),

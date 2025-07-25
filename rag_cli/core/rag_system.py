@@ -26,56 +26,6 @@ from .query_processor import QueryProcessor
 from .error_handler import ErrorHandler
 
 
-class ExpandedRetriever(BaseRetriever):
-    """Custom retriever that expands queries using LLM"""
-    
-    def __init__(self, rag_system, base_retriever, k, **kwargs):
-        super().__init__(**kwargs)
-        self.rag_system = rag_system
-        self.base_retriever = base_retriever
-        self.k = k
-        
-    def _get_relevant_documents(self, query: str) -> List[Document]:
-        # Expand the query
-        expanded_queries = self.rag_system._expand_query(query)
-        
-        # Retrieve documents for each query
-        all_docs = []
-        doc_contents_seen = set()
-        max_docs_per_query = 10  # Limit docs per query
-        max_total_docs = 30  # Hard limit on total docs
-        
-        for expanded_query in expanded_queries:
-            if len(all_docs) >= max_total_docs:
-                RichLogger.warning(f"Reached maximum document limit ({max_total_docs}), stopping retrieval")
-                break
-                
-            try:
-                docs = self.base_retriever.get_relevant_documents(expanded_query)
-                added_count = 0
-                for doc in docs[:max_docs_per_query]:  # Limit per query
-                    # Deduplicate by content
-                    content_hash = hash(doc.page_content)
-                    if content_hash not in doc_contents_seen:
-                        doc_contents_seen.add(content_hash)
-                        all_docs.append(doc)
-                        added_count += 1
-                        if len(all_docs) >= max_total_docs:
-                            break
-                RichLogger.info(f"Query '{expanded_query[:50]}...' added {added_count} new documents")
-            except Exception as e:
-                RichLogger.warning(f"Failed to retrieve for query: {expanded_query[:50]}... - {str(e)}")
-        
-        RichLogger.info(f"Query expansion retrieved {len(all_docs)} unique documents from {len(expanded_queries)} queries")
-        
-        # Return requested number of documents
-        return all_docs[:self.k]
-    
-    async def _aget_relevant_documents(self, query: str) -> List[Document]:
-        # For async, just call sync version
-        return self._get_relevant_documents(query)
-
-
 class RAGSystem:
     """Enhanced RAG System with modern configuration and robust error handling"""
 
@@ -104,6 +54,20 @@ class RAGSystem:
         # Initialize processors
         self.query_processor = QueryProcessor(settings_manager)
         self.error_handler = ErrorHandler(model_name)
+        
+        # Initialize new focused components
+        from rag_cli.core.query_executor import QueryExecutor
+        from rag_cli.core.retrieval_manager import RetrievalManager
+        
+        self.query_executor = QueryExecutor(
+            self.llm_manager, 
+            self.query_processor,
+            self.error_handler
+        )
+        self.retrieval_manager = RetrievalManager(
+            self.vectorstore_manager,
+            self.query_processor
+        )
         
         # Initialize the managers
         self.llm_manager.initialize(model_name, temperature)
@@ -165,22 +129,17 @@ class RAGSystem:
             progress_callback("Setting up QA chain...")
         self._setup_qa_chain()
 
-    def _expand_query(self, original_query):
+    def _expand_query(self, original_query: str) -> List[str]:
         """Expand a query using the small LLM to improve retrieval"""
         return self.query_processor.expand_query(original_query, self.query_expansion_llm)
 
-    def _rerank_documents(self, query, documents):
+    def _rerank_documents(self, query: str, documents: List[Document]) -> List[Document]:
         """Rerank documents using the cross-encoder model"""
         return self.vectorstore_manager.rerank_documents(query, documents)
 
-    def _create_expanded_retriever(self, k):
+    def _create_expanded_retriever(self, k: int) -> BaseRetriever:
         """Create a retriever that uses query expansion if enabled"""
-        base_retriever = self.vectorstore.as_retriever(search_kwargs={"k": k})
-        
-        if not self.query_expansion_llm:
-            return base_retriever
-            
-        return ExpandedRetriever(self, base_retriever, k)
+        return self.retrieval_manager.create_expanded_retriever(k, self.query_expansion_llm)
     
     def _load_system_prompt(self, prompt_file: str = "system_prompt.md") -> str:
         """Load system prompt from file or return default.
@@ -216,7 +175,7 @@ class RAGSystem:
             RichLogger.warning(f"Failed to load {prompt_file}: {str(e)}")
             return default_prompt
     
-    def _setup_qa_chain(self):
+    def _setup_qa_chain(self) -> None:
         """Setup the QA chain using modern LangChain approach"""
         RichLogger.info(f"Setting up QA chain with retrieval_k={self.retrieval_k}")
         
@@ -246,142 +205,38 @@ class RAGSystem:
     
     async def _execute_qa_chain(self, question: str) -> Dict[str, Any]:
         """Execute query using the QA chain."""
-        result = self.qa_chain.invoke({"input": question})
-        
-        # Extract answer and source documents
-        answer_text = result.get("answer", "No answer generated")
-        source_docs = result.get("context", [])
-        
-        # Process result using shared logic
-        answer_text, source_docs = self._process_qa_result(answer_text, source_docs, question)
-        
-        return {"response": answer_text, "context": source_docs}
+        return await self.query_executor.execute_qa_chain(
+            self.qa_chain, 
+            question, 
+            self._rerank_documents
+        )
     
     def _log_relevance_scores(self, question: str) -> None:
         """Log document relevance scores for debugging."""
-        try:
-            docs_with_scores = self.vectorstore.similarity_search_with_score(question, k=self.retrieval_k)
-            # Convert to documents with metadata
-            documents = []
-            for doc, score in docs_with_scores:
-                doc.metadata = doc.metadata or {}
-                doc.metadata['score'] = score
-                documents.append(doc)
-            # Use query processor to log scores
-            self.query_processor.log_relevance_scores(documents[:3])
-        except Exception as e:
-            RichLogger.warning(f"Could not get relevance scores: {str(e)}")
+        self.retrieval_manager.log_relevance_scores(question, self.retrieval_k)
     
     async def _execute_manual_retrieval(self, question: str) -> Dict[str, Any]:
         """Execute manual retrieval when QA chain is not available."""
-        # Use expanded retriever if query expansion is enabled
         retriever = self._create_expanded_retriever(self.retrieval_k)
-        
-        # Get relevant documents using shared retrieval logic
-        relevant_docs = self._perform_retrieval(retriever, question)
-        
-        if not relevant_docs:
-            return {
-                "response": "I couldn't find any relevant information in the documents to answer your question.", 
-                "context": []
-            }
-        
-        # Apply reranking if enabled
-        if self.reranker and relevant_docs:
-            relevant_docs = self._rerank_documents(question, relevant_docs)
-        
-        # Format context and create prompt
-        context = self._format_context(relevant_docs)
-        prompt = self._create_prompt(context, question)
-        
-        # Query LLM
-        response = self.llm_manager.invoke(prompt)
-        
-        return {"response": response, "context": relevant_docs}
-    
-    def _format_context(self, documents: List) -> str:
-        """Format documents into context string."""
-        return self.query_processor.format_context(documents)
-    
-    def _create_prompt(self, context: str, question: str) -> str:
-        """Create prompt with context and question."""
         system_prompt = self._load_system_prompt()
-        return self.query_processor.create_rag_prompt(question, context, system_prompt)
-
-    def _perform_retrieval(self, retriever, question):
-        """Shared retrieval logic with fallback"""
-        try:
-            return retriever.invoke(question)
-        except Exception as e:
-            from rag_cli.utils.logger import RichLogger
-            RichLogger.warning(f"Retriever invoke failed, using fallback: {str(e)}")
-            return retriever.get_relevant_documents(question)
-
-    def _process_qa_result(self, answer_text, source_docs, question):
-        """Process QA chain result with reranking and conversion"""
-        # Apply reranking if enabled
-        if self.reranker and source_docs:
-            source_docs = self._rerank_documents(question, source_docs)
         
-        # Log relevance scores for debugging
-        self._log_relevance_scores(question)
-        
-        # Convert response to string if it's an object
-        if hasattr(answer_text, 'content'):
-            answer_text = answer_text.content
-        else:
-            answer_text = str(answer_text)
-        
-        return answer_text, source_docs
+        return await self.query_executor.execute_manual_retrieval(
+            retriever,
+            question,
+            self._rerank_documents,
+            system_prompt
+        )
     
     def _handle_file_descriptor_error(self, question: str) -> Dict[str, Any]:
         """Handle file descriptor errors with fallback."""
-        RichLogger.warning("Falling back to simple query without retrieval due to file descriptor error")
-        
-        # Create a specific file descriptor error
-        fd_error = Exception("fds_to_keep error - file descriptor limit exceeded")
-        error_info = self.error_handler.handle_error(fd_error)
-        
-        # Try fallback query
-        try:
-            simple_prompt = f"Question: {question}\n\nPlease provide a helpful response based on general knowledge."
-            response = self.llm_manager.invoke(simple_prompt)
-            return {"response": response, "context": [], "error_info": error_info}
-        except Exception:
-            # Return formatted error message
-            return {
-                "response": self.error_handler.format_error_for_user(error_info), 
-                "context": [],
-                "error_info": error_info
-            }
+        return self.query_executor.handle_file_descriptor_error(question)
     
     def _get_connection_error_message(self, provider: str) -> str:
         """Get provider-specific connection error messages."""
-        messages = {
-            "ollama": (
-                "Cannot connect to Ollama. You can:\n"
-                "1. Start Ollama (run 'ollama serve' in terminal)\n"
-                "2. Install the model (run 'ollama pull llama3.2')\n"
-                "3. Or switch to an API provider in Settings (Ctrl+S)"
-            ),
-            "openai": (
-                "Cannot connect to OpenAI API. Please check:\n"
-                "1. Your API key is correct in Settings (Ctrl+S)\n"
-                "2. Your internet connection is working\n"
-                "3. The API endpoint URL is correct (if using custom endpoint)\n"
-                "4. Or switch to Ollama in Settings (Ctrl+S)"
-            ),
-            "anthropic": (
-                "Cannot connect to Anthropic API. Please check:\n"
-                "1. Your API key is correct in Settings (Ctrl+S)\n"
-                "2. Your internet connection is working\n"
-                "3. Or switch to Ollama in Settings (Ctrl+S)"
-            )
-        }
-        return messages.get(provider, (
-            "Connection error. Please check your network connection and try again.\n"
-            "You can also switch providers in Settings (Ctrl+S)"
-        ))
+        from rag_cli.utils.error_utils import ErrorUtils
+        
+        error_info = ErrorUtils.handle_connection_error(provider)
+        return f"{error_info['message']}. {error_info['suggestion']}"
     
     def _execute_query_in_thread(self, question: str) -> Dict[str, Any]:
         """Execute query in a thread to avoid file descriptor issues."""
@@ -417,45 +272,23 @@ class RAGSystem:
     
     def _execute_qa_chain_sync(self, question: str) -> Dict[str, Any]:
         """Synchronous version of _execute_qa_chain for thread execution."""
-        result = self.qa_chain.invoke({"input": question})
-        
-        # Extract answer and source documents
-        answer_text = result.get("answer", "No answer generated")
-        source_docs = result.get("context", [])
-        
-        # Process result using shared logic
-        answer_text, source_docs = self._process_qa_result(answer_text, source_docs, question)
-        
-        RichLogger.info(f"QA chain retrieved {len(source_docs)} documents (retrieval_k={self.retrieval_k})")
-        
-        return {"response": answer_text, "context": source_docs}
+        return self.query_executor.execute_qa_chain_sync(
+            self.qa_chain,
+            question,
+            self._rerank_documents
+        )
     
     def _execute_manual_retrieval_sync(self, question: str) -> Dict[str, Any]:
         """Synchronous version of _execute_manual_retrieval for thread execution."""
-        # Use expanded retriever if query expansion is enabled
         retriever = self._create_expanded_retriever(self.retrieval_k)
+        system_prompt = self._load_system_prompt()
         
-        # Get relevant documents using shared retrieval logic
-        relevant_docs = self._perform_retrieval(retriever, question)
-        
-        if not relevant_docs:
-            return {
-                "response": "I couldn't find any relevant information in the documents to answer your question.", 
-                "context": []
-            }
-        
-        # Apply reranking if enabled
-        if self.reranker and relevant_docs:
-            relevant_docs = self._rerank_documents(question, relevant_docs)
-        
-        # Format context and create prompt
-        context = self._format_context(relevant_docs)
-        prompt = self._create_prompt(context, question)
-        
-        # Query LLM
-        response = self.llm_manager.invoke(prompt)
-        
-        return {"response": response, "context": relevant_docs}
+        return self.query_executor.execute_manual_retrieval_sync(
+            retriever,
+            question,
+            self._rerank_documents,
+            system_prompt
+        )
     
     async def query(self, question: str) -> Dict[str, Any]:
         """Query the RAG system with better error handling and async execution"""
@@ -490,7 +323,7 @@ class RAGSystem:
             "error_info": error_info
         }
 
-    def get_stats(self):
+    def get_stats(self) -> Optional[Dict[str, Any]]:
         """Get database statistics"""
         stats = self.vectorstore_manager.get_stats()
         if stats:
