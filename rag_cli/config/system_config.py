@@ -5,26 +5,11 @@ from pathlib import Path
 
 # Chunk settings for document processing
 CHUNK_SETTINGS = {
-    "default": {
-        "size": 1000,
-        "overlap": 200
-    },
-    "small": {
-        "size": 500,
-        "overlap": 100
-    },
-    "medium": {
-        "size": 1000,
-        "overlap": 200
-    },
-    "large": {
-        "size": 2000,
-        "overlap": 400
-    },
-    "code": {
-        "size": 1500,
-        "overlap": 300
-    }
+    "default": {"size": 1000, "overlap": 200},
+    "small": {"size": 500, "overlap": 100},
+    "medium": {"size": 1000, "overlap": 200},
+    "large": {"size": 2000, "overlap": 400},
+    "code": {"size": 1500, "overlap": 300},
 }
 
 DEFAULT_CHUNK_SIZE = CHUNK_SETTINGS["default"]["size"]
@@ -37,20 +22,15 @@ RETRIEVAL_SETTINGS = {
         "minimal": 1,
         "standard": 3,
         "comprehensive": 5,
-        "exhaustive": 10
+        "exhaustive": 10,
     },
-    "reranker_top_k": {
-        "default": 3,
-        "minimal": 1,
-        "standard": 3,
-        "comprehensive": 5
-    },
+    "reranker_top_k": {"default": 3, "minimal": 1, "standard": 3, "comprehensive": 5},
     "expansion_queries": {
         "default": 3,
         "minimal": 1,
         "standard": 3,
-        "comprehensive": 5
-    }
+        "comprehensive": 5,
+    },
 }
 
 DEFAULT_RETRIEVAL_K = RETRIEVAL_SETTINGS["k"]["default"]
@@ -73,7 +53,7 @@ FILE_SETTINGS = {
     "chat_history_file": "chat_history.json",
     "system_prompt_file": "system_prompt.md",
     "log_file": str(LOGS_DIR / "rag_cli.log"),
-    "error_log_file": str(LOGS_DIR / "errors.log")
+    "error_log_file": str(LOGS_DIR / "errors.log"),
 }
 
 # Resource limits
@@ -81,7 +61,7 @@ RESOURCE_LIMITS = {
     "max_file_descriptors": 8192,
     "max_memory_mb": 4096,
     "max_threads": 8,
-    "max_workers": 4
+    "max_workers": 4,
 }
 
 # Timeouts (in seconds)
@@ -91,7 +71,7 @@ TIMEOUTS = {
     "embedding": 30,
     "reranking": 15,
     "database_operation": 120,
-    "file_operation": 10
+    "file_operation": 10,
 }
 
 # Batch processing
@@ -102,7 +82,7 @@ BATCH_SETTINGS = {
     "large": 200,
     "max_retries": 3,
     "retry_delay": 1.0,
-    "backoff_factor": 2.0
+    "backoff_factor": 2.0,
 }
 
 DEFAULT_BATCH_SIZE = BATCH_SETTINGS["default_size"]
@@ -113,7 +93,7 @@ ENV_VARS = {
     "PYTHONUNBUFFERED": "1",
     "PYTORCH_ENABLE_MPS_FALLBACK": "1",
     "OMP_NUM_THREADS": "1",
-    "ANONYMIZED_TELEMETRY": "False"
+    "ANONYMIZED_TELEMETRY": "False",
 }
 
 # Apply environment variables
@@ -128,7 +108,7 @@ FEATURES = {
     "streaming": True,
     "async_processing": True,
     "auto_retry": True,
-    "progress_tracking": True
+    "progress_tracking": True,
 }
 
 # Debug settings
@@ -138,5 +118,5 @@ DEBUG_SETTINGS = {
     "log_to_console": True,
     "show_timings": False,
     "show_memory_usage": False,
-    "trace_calls": False
+    "trace_calls": False,
 }

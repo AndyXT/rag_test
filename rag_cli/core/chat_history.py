@@ -1,4 +1,5 @@
 """Chat history management for RAG CLI application"""
+
 import os
 import json
 from datetime import datetime
@@ -34,7 +35,9 @@ class ChatHistory:
             TypeError,
             AttributeError,
         ) as e:
-            RichLogger.warning(f"Could not load chat history from {self.history_file}: {e}")
+            RichLogger.warning(
+                f"Could not load chat history from {self.history_file}: {e}"
+            )
             self.sessions = []
 
     def save_history(self) -> None:
@@ -43,7 +46,9 @@ class ChatHistory:
             with open(self.history_file, "w") as f:
                 json.dump({"sessions": self.sessions}, f, indent=2)
         except (IOError, OSError, PermissionError, TypeError) as e:
-            RichLogger.warning(f"Could not save chat history to {self.history_file}: {e}")
+            RichLogger.warning(
+                f"Could not save chat history to {self.history_file}: {e}"
+            )
 
     def add_exchange(self, question: str, answer: str) -> None:
         """Add Q&A exchange to current session"""

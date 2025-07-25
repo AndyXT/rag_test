@@ -6,4 +6,10 @@ from rag_cli.core.rag_system import RAGSystem
 from rag_cli.core.llm_manager import LLMManager
 from rag_cli.core.vectorstore_manager import VectorStoreManager
 
-__all__ = ["SettingsManager", "ChatHistory", "RAGSystem", "LLMManager", "VectorStoreManager"]
+__all__ = [
+    "SettingsManager",
+    "ChatHistory",
+    "RAGSystem",
+    "LLMManager",
+    "VectorStoreManager",
+]

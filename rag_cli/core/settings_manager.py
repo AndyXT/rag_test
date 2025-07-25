@@ -1,4 +1,5 @@
 """Settings manager for RAG CLI application"""
+
 import os
 import json
 from typing import Dict, Any
@@ -53,7 +54,9 @@ class SettingsManager:
             TypeError,
             AttributeError,
         ) as e:
-            RichLogger.warning(f"Could not load settings from {self.settings_file}: {e}")
+            RichLogger.warning(
+                f"Could not load settings from {self.settings_file}: {e}"
+            )
             pass
         return self.default_settings.copy()
 

@@ -8,9 +8,7 @@ from typing import Optional, List, Dict, Any
 from langchain_core.documents import Document
 
 from rag_cli.utils.logger import RichLogger
-from rag_cli.utils.defaults import (
-    DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP
-)
+from rag_cli.utils.defaults import DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP
 
 # Import focused managers
 from rag_cli.core.embeddings_manager import EmbeddingsManager
@@ -27,35 +25,40 @@ class VectorStoreManager:
         self.settings_manager = settings_manager
         self.chunk_size = DEFAULT_CHUNK_SIZE
         self.chunk_overlap = DEFAULT_CHUNK_OVERLAP
-        
+
         # Initialize embeddings and chroma managers only
         self.embeddings_manager = EmbeddingsManager(settings_manager)
         self.chroma_manager = ChromaManager()
         self.reranker_manager = RerankerManager(settings_manager)
-        
+
         # Document processing will be handled separately
         from rag_cli.core.document_processor import DocumentProcessor
+
         self.document_processor = DocumentProcessor(
             PDFProcessor(),
             self.embeddings_manager,
             CacheManager(),
             self.chunk_size,
-            self.chunk_overlap
+            self.chunk_overlap,
         )
 
-    def initialize(self, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None) -> None:
+    def initialize(
+        self, chunk_size: Optional[int] = None, chunk_overlap: Optional[int] = None
+    ) -> None:
         """Initialize or update settings"""
         if chunk_size is not None:
             self.chunk_size = chunk_size
         if chunk_overlap is not None:
             self.chunk_overlap = chunk_overlap
-            
+
         # Update document processor settings
-        self.document_processor.update_chunk_settings(self.chunk_size, self.chunk_overlap)
-        
+        self.document_processor.update_chunk_settings(
+            self.chunk_size, self.chunk_overlap
+        )
+
         # Check and increase file descriptor limit
         self._check_and_increase_fd_limit()
-        
+
         # Initialize embeddings
         self.embeddings_manager.initialize()
 
@@ -71,10 +74,16 @@ class VectorStoreManager:
             if soft < target_limit:
                 try:
                     resource.setrlimit(resource.RLIMIT_NOFILE, (target_limit, hard))
-                    RichLogger.success(f"Increased file descriptor limit from {soft} to {target_limit}")
+                    RichLogger.success(
+                        f"Increased file descriptor limit from {soft} to {target_limit}"
+                    )
                 except Exception:
-                    RichLogger.warning(f"Could not increase file descriptor limit (current: {soft})")
-                    RichLogger.warning("💡 Try running: ulimit -n 8192 before starting the app")
+                    RichLogger.warning(
+                        f"Could not increase file descriptor limit (current: {soft})"
+                    )
+                    RichLogger.warning(
+                        "💡 Try running: ulimit -n 8192 before starting the app"
+                    )
         except Exception:
             # Not critical if this fails
             pass
@@ -91,37 +100,46 @@ class VectorStoreManager:
 
         # Get embeddings from the embeddings manager
         embeddings = self.embeddings_manager.get_embeddings()
-        
+
         # Delegate to chroma manager
         result = self.chroma_manager.load_existing_db(db_path, embeddings)
-        
+
         return result
 
     def create_db_from_docs(
-        self, docs_path: str = "./documents", db_path: str = "./chroma_db", progress_callback=None
+        self,
+        docs_path: str = "./documents",
+        db_path: str = "./chroma_db",
+        progress_callback=None,
     ):
         """Create new ChromaDB from documents with robust error handling"""
         try:
             self._setup_environment()
-            
+
             if progress_callback:
                 progress_callback("Processing documents...")
-            
+
             # Use document processor to handle all document operations
-            all_documents = self.document_processor.process_documents(docs_path, progress_callback)
-            
+            all_documents = self.document_processor.process_documents(
+                docs_path, progress_callback
+            )
+
             if progress_callback:
-                progress_callback(f"Creating embeddings for {len(all_documents)} chunks...")
-            
+                progress_callback(
+                    f"Creating embeddings for {len(all_documents)} chunks..."
+                )
+
             # Get embeddings
             embeddings = self.embeddings_manager.get_embeddings()
-            
+
             # Create database using chroma manager
             self.chroma_manager.create_database(all_documents, embeddings, db_path)
-            
+
             # Report success
             if progress_callback:
-                progress_callback(f"Successfully created database with {len(all_documents)} chunks")
+                progress_callback(
+                    f"Successfully created database with {len(all_documents)} chunks"
+                )
 
         except Exception as e:
             # Force cleanup on error
@@ -152,6 +170,5 @@ class VectorStoreManager:
     def get_stats(self) -> Optional[Dict[str, Any]]:
         """Get database statistics"""
         return self.chroma_manager.get_stats(
-            chunk_size=self.chunk_size,
-            chunk_overlap=self.chunk_overlap
+            chunk_size=self.chunk_size, chunk_overlap=self.chunk_overlap
         )

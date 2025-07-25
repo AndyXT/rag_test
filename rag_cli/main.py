@@ -10,7 +10,7 @@ def main():
     """Run the RAG Chat application"""
     # Enable TUI mode to prevent duplicate console output
     RichLogger.set_tui_mode(True)
-    
+
     app = RAGChatApp()
     app.run()
 

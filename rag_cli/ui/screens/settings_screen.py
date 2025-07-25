@@ -1,4 +1,5 @@
 """Settings screen for RAG CLI application"""
+
 import os
 from typing import Any
 from textual.app import ComposeResult
@@ -18,7 +19,7 @@ class SettingsScreen(ModalScreen):
 
     def _update_field_visibility(self, field_class: str, visible: bool) -> None:
         """Update visibility of fields by class name.
-        
+
         Args:
             field_class: CSS class name to target
             visible: Whether to show or hide the fields
@@ -32,7 +33,7 @@ class SettingsScreen(ModalScreen):
                     field.remove_class("visible")
         except Exception:
             pass  # Non-critical UI operation
-    
+
     def on_mount(self) -> None:
         """Load current settings when screen is mounted"""
         # Get settings from the settings manager (which reflects current RAG state)
@@ -55,9 +56,11 @@ class SettingsScreen(ModalScreen):
         self.query_one("#retrieval-input", Input).value = str(
             settings.get("retrieval_k", 3)
         )
-        
+
         # Update show context switch
-        self.query_one("#show-context-switch", Switch).value = settings.get("show_context", False)
+        self.query_one("#show-context-switch", Switch).value = settings.get(
+            "show_context", False
+        )
 
         # Update LLM provider settings
         provider_select = self.query_one("#provider-select", Select)
@@ -77,18 +80,22 @@ class SettingsScreen(ModalScreen):
         self.query_one("#anthropic-model-input", Input).value = str(
             settings.get("anthropic_model", "claude-3-haiku-20240307")
         )
-        
+
         # Update reranker settings
-        self.query_one("#use-reranker-switch", Switch).value = settings.get("use_reranker", False)
+        self.query_one("#use-reranker-switch", Switch).value = settings.get(
+            "use_reranker", False
+        )
         self.query_one("#reranker-model-input", Input).value = str(
             settings.get("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2")
         )
         self.query_one("#reranker-top-k-input", Input).value = str(
             settings.get("reranker_top_k", 3)
         )
-        
+
         # Update query expansion settings
-        self.query_one("#use-query-expansion-switch", Switch).value = settings.get("use_query_expansion", False)
+        self.query_one("#use-query-expansion-switch", Switch).value = settings.get(
+            "use_query_expansion", False
+        )
         self.query_one("#query-expansion-model-input", Input).value = str(
             settings.get("query_expansion_model", "llama3.2:3b")
         )
@@ -204,7 +211,7 @@ class SettingsScreen(ModalScreen):
 
                 yield Static("")  # Spacer
                 yield Label("🔍 Reranking Settings", classes="section-header")
-                
+
                 with Horizontal():
                     yield Switch(value=False, id="use-reranker-switch")
                     yield Label("Use reranking to improve retrieval quality")
@@ -227,7 +234,7 @@ class SettingsScreen(ModalScreen):
 
                 yield Static("")  # Spacer
                 yield Label("🔄 Query Expansion Settings", classes="section-header")
-                
+
                 with Horizontal():
                     yield Switch(value=False, id="use-query-expansion-switch")
                     yield Label("Use query expansion to improve retrieval")
@@ -240,7 +247,9 @@ class SettingsScreen(ModalScreen):
                     classes="query-expansion-field",
                 )
 
-                yield Label("Number of Expanded Queries:", classes="query-expansion-field")
+                yield Label(
+                    "Number of Expanded Queries:", classes="query-expansion-field"
+                )
                 yield Input(
                     value="3",
                     placeholder="How many query variations to generate",
@@ -303,8 +312,12 @@ class SettingsScreen(ModalScreen):
             use_reranker_switch = self.query_one("#use-reranker-switch", Switch)
             reranker_model_input = self.query_one("#reranker-model-input", Input)
             reranker_top_k_input = self.query_one("#reranker-top-k-input", Input)
-            use_query_expansion_switch = self.query_one("#use-query-expansion-switch", Switch)
-            query_expansion_model_input = self.query_one("#query-expansion-model-input", Input)
+            use_query_expansion_switch = self.query_one(
+                "#use-query-expansion-switch", Switch
+            )
+            query_expansion_model_input = self.query_one(
+                "#query-expansion-model-input", Input
+            )
             expansion_queries_input = self.query_one("#expansion-queries-input", Input)
 
             # Validate and parse values
@@ -319,13 +332,16 @@ class SettingsScreen(ModalScreen):
                     "api_key": api_key_input.value or "",
                     "api_base_url": api_base_input.value or "",
                     "openai_model": openai_model_input.value or "gpt-3.5-turbo",
-                    "anthropic_model": anthropic_model_input.value or "claude-3-haiku-20240307",
+                    "anthropic_model": anthropic_model_input.value
+                    or "claude-3-haiku-20240307",
                     "show_context": show_context_switch.value,
                     "use_reranker": use_reranker_switch.value,
-                    "reranker_model": reranker_model_input.value or "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    "reranker_model": reranker_model_input.value
+                    or "cross-encoder/ms-marco-MiniLM-L-6-v2",
                     "reranker_top_k": int(reranker_top_k_input.value or "3"),
                     "use_query_expansion": use_query_expansion_switch.value,
-                    "query_expansion_model": query_expansion_model_input.value or "llama3.2:3b",
+                    "query_expansion_model": query_expansion_model_input.value
+                    or "llama3.2:3b",
                     "expansion_queries": int(expansion_queries_input.value or "3"),
                 }
 

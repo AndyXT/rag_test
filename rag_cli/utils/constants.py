@@ -1,4 +1,5 @@
 """Constants and environment setup for RAG CLI Application"""
+
 import os
 
 # Optional clipboard support

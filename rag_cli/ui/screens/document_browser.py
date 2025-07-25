@@ -1,4 +1,5 @@
 """Document browser screen for RAG CLI application"""
+
 from pathlib import Path
 from typing import Any
 from textual.app import ComposeResult

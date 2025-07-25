@@ -14,7 +14,7 @@ from rag_cli.config.model_config import (
     DEFAULT_QUERY_EXPANSION_MODEL,
     DEFAULT_TEMPERATURE,
     DEFAULT_TIMEOUT,
-    LARGE_MODELS
+    LARGE_MODELS,
 )
 
 from rag_cli.config.system_config import (
@@ -23,13 +23,13 @@ from rag_cli.config.system_config import (
     DEFAULT_RETRIEVAL_K,
     DEFAULT_RERANKER_TOP_K,
     DEFAULT_EXPANSION_QUERIES,
-    DEFAULT_BATCH_SIZE
+    DEFAULT_BATCH_SIZE,
 )
 
 from rag_cli.config.database_config import (
     DEFAULT_COLLECTION_NAME,
     DEFAULT_PERSIST_DIRECTORY,
-    DEFAULT_DOCUMENTS_DIRECTORY
+    DEFAULT_DOCUMENTS_DIRECTORY,
 )
 
 # Additional re-exports for convenience
@@ -62,5 +62,5 @@ __all__ = [
     # Batch processing
     "DEFAULT_BATCH_SIZE",
     # File settings
-    "DEFAULT_DOCUMENTS_DIRECTORY"
+    "DEFAULT_DOCUMENTS_DIRECTORY",
 ]

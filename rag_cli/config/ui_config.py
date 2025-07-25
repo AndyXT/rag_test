@@ -10,7 +10,7 @@ THEME_SETTINGS = {
         "error": "#FF6B6B",
         "warning": "#FFD93D",
         "success": "#6BCF7F",
-        "info": "#4ECDC4"
+        "info": "#4ECDC4",
     },
     "dark": {
         "primary": "#BB86FC",
@@ -20,7 +20,7 @@ THEME_SETTINGS = {
         "error": "#CF6679",
         "warning": "#FFB74D",
         "success": "#81C784",
-        "info": "#64B5F6"
+        "info": "#64B5F6",
     },
     "light": {
         "primary": "#1976D2",
@@ -30,8 +30,8 @@ THEME_SETTINGS = {
         "error": "#D32F2F",
         "warning": "#F57C00",
         "success": "#388E3C",
-        "info": "#0288D1"
-    }
+        "info": "#0288D1",
+    },
 }
 
 # UI Layout settings
@@ -43,7 +43,7 @@ LAYOUT_SETTINGS = {
     "chat_input_max_height": 10,
     "message_wrap_width": 80,
     "modal_width": 60,
-    "modal_height": 80
+    "modal_height": 80,
 }
 
 # Keybindings
@@ -61,7 +61,7 @@ KEYBINDINGS = {
     "history_down": "down",
     "toggle_context": "ctrl+t",
     "export_chat": "ctrl+e",
-    "search": "ctrl+f"
+    "search": "ctrl+f",
 }
 
 # Display settings
@@ -75,7 +75,7 @@ DISPLAY_SETTINGS = {
     "syntax_highlighting": True,
     "markdown_rendering": True,
     "auto_scroll": True,
-    "message_grouping": True
+    "message_grouping": True,
 }
 
 # Animation settings
@@ -84,7 +84,7 @@ ANIMATION_SETTINGS = {
     "typing_speed": 50,  # chars per second
     "fade_duration": 0.3,
     "slide_duration": 0.2,
-    "progress_spinner": True
+    "progress_spinner": True,
 }
 
 # Status messages
@@ -95,7 +95,7 @@ STATUS_MESSAGES = {
     "processing": "Processing response...",
     "ready": "Ready",
     "error": "Error occurred",
-    "offline": "Offline mode"
+    "offline": "Offline mode",
 }
 
 # Modal titles
@@ -106,7 +106,7 @@ MODAL_TITLES = {
     "export": "Export Chat",
     "import": "Import Documents",
     "database": "Database Management",
-    "history": "Chat History"
+    "history": "Chat History",
 }
 
 # Emoji mappings
@@ -122,14 +122,14 @@ EMOJI_MAPPINGS = {
     "folder": "📁",
     "search": "🔍",
     "settings": "⚙️",
-    "database": "🗄️"
+    "database": "🗄️",
 }
 
 # Progress indicators
 PROGRESS_INDICATORS = {
     "spinner": ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
     "bar": ["▱", "▰"],
-    "dots": ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+    "dots": ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
 }
 
 # Message formatting
@@ -141,7 +141,7 @@ MESSAGE_FORMATTING = {
     "date_format": "%Y-%m-%d",
     "max_message_length": 10000,
     "truncate_indicator": "... (truncated)",
-    "code_block_theme": "monokai"
+    "code_block_theme": "monokai",
 }
 
 # Notification settings
@@ -151,5 +151,5 @@ NOTIFICATION_SETTINGS = {
     "position": "bottom-right",  # top-left, top-right, bottom-left, bottom-right
     "sound": False,
     "stack": True,
-    "max_stack": 3
+    "max_stack": 3,
 }

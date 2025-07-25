@@ -13,13 +13,13 @@ from . import model_config, system_config, database_config, ui_config
 __all__ = [
     # Re-exported constants
     "DEFAULT_MODEL",
-    "DEFAULT_TEMPERATURE", 
+    "DEFAULT_TEMPERATURE",
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_CHUNK_OVERLAP",
     "DEFAULT_PERSIST_DIRECTORY",
     # Configuration modules
     "model_config",
-    "system_config", 
+    "system_config",
     "database_config",
     "ui_config",
 ]

@@ -231,7 +231,9 @@ class RAGChatApp(App):
         self.chat_history = ChatHistory()
         self.current_progress = 0
         self.progress_timer: Optional[Any] = None
-        self.chat_messages: List[Dict[str, Any]] = []  # Store messages for copying  # Store messages for copying
+        self.chat_messages: List[
+            Dict[str, Any]
+        ] = []  # Store messages for copying  # Store messages for copying
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -342,14 +344,20 @@ class RAGChatApp(App):
             db_info = info.get("database", {})
             settings = info.get("settings", {})
             system = info.get("system", {})
-            
+
             # Display most important stats
             if db_info.get("loaded") and db_info.get("document_count", 0) > 0:
-                stats_table.add_row("Documents", str(db_info.get("document_count", "Unknown")))
+                stats_table.add_row(
+                    "Documents", str(db_info.get("document_count", "Unknown"))
+                )
             stats_table.add_row("Model", settings.get("model", "Unknown"))
-            stats_table.add_row("Temperature", f"{settings.get('temperature', 0.1):.1f}")
+            stats_table.add_row(
+                "Temperature", f"{settings.get('temperature', 0.1):.1f}"
+            )
             stats_table.add_row("Chunk Size", str(settings.get("chunk_size", 1000)))
-            stats_table.add_row("DB Loaded", "✅" if system.get("vectorstore_loaded") else "❌")
+            stats_table.add_row(
+                "DB Loaded", "✅" if system.get("vectorstore_loaded") else "❌"
+            )
 
             stats_content.write(stats_table)
         else:
@@ -418,23 +426,23 @@ class RAGChatApp(App):
     async def _create_database(self):
         """Create database with enhanced progress tracking"""
         from rag_cli.services.document_service import DocumentService
-        
+
         chat = self.query_one("#chat", RichLog)
         self.processing = True
 
         try:
             # Validate documents directory
             pdf_files = await self._validate_documents_directory()
-            
+
             # Show estimated processing time
             _, time_str = DocumentService.estimate_processing_time(pdf_files)
             self.add_message("info", f"Estimated processing time: {time_str}")
-            
+
             # Check disk space
             has_space, space_msg = DocumentService.check_disk_space("./chroma_db")
             if not has_space:
                 raise ValueError(space_msg)
-                
+
             await self._create_database_with_progress(pdf_files, chat)
         except Exception as e:
             await self._handle_database_creation_error(e, chat)
@@ -445,12 +453,14 @@ class RAGChatApp(App):
     async def _validate_documents_directory(self):
         """Validate documents directory and return PDF files"""
         from rag_cli.services.document_service import DocumentService
-        
-        is_valid, message, pdf_files = DocumentService.validate_documents_directory("./documents")
-        
+
+        is_valid, message, pdf_files = DocumentService.validate_documents_directory(
+            "./documents"
+        )
+
         if not is_valid:
             raise ValueError(message)
-        
+
         return pdf_files
 
     async def _create_database_with_progress(self, pdf_files, chat):
@@ -480,9 +490,7 @@ class RAGChatApp(App):
 
         # Show progress messages that were collected
         if progress_messages:
-            chat.write(
-                f"[blue]📊 Processing summary: {progress_messages[-1]}[/blue]"
-            )
+            chat.write(f"[blue]📊 Processing summary: {progress_messages[-1]}[/blue]")
 
         # Show summary of what was processed
         stats = self.rag_service.get_system_info()
@@ -496,21 +504,21 @@ class RAGChatApp(App):
     async def _handle_database_creation_error(self, error, chat):
         """Handle database creation errors with specific messages"""
         error_msg = str(error)
-        
+
         error_handlers = {
             "all batches failed": self._handle_batch_failure_error,
             "fds_to_keep": self._handle_file_descriptor_error,
             "file descriptor": self._handle_file_descriptor_error,
             "No PDF files found": self._handle_no_pdf_error,
-            "No documents could be processed": self._handle_processing_error
+            "No documents could be processed": self._handle_processing_error,
         }
-        
+
         for key, handler in error_handlers.items():
             if key in error_msg or key.lower() in error_msg.lower():
                 handler(chat)
                 self.update_progress(f"❌ Error: {error_msg[:50]}...")
                 return
-        
+
         # Default error handling
         chat.write(f"[red]❌ Database creation error: {error_msg}[/red]")
         chat.write(
@@ -532,9 +540,7 @@ class RAGChatApp(App):
 
     def _handle_file_descriptor_error(self, chat):
         """Handle file descriptor errors"""
-        chat.write(
-            "[red]❌ PDF processing error: File descriptor issue[/red]"
-        )
+        chat.write("[red]❌ PDF processing error: File descriptor issue[/red]")
         chat.write(
             "[yellow]💡 This is often caused by corrupted PDFs or system limitations.[/yellow]"
         )
@@ -544,9 +550,7 @@ class RAGChatApp(App):
 
     def _handle_no_pdf_error(self, chat):
         """Handle no PDF files error"""
-        chat.write(
-            "[red]❌ No PDF files found in ./documents directory[/red]"
-        )
+        chat.write("[red]❌ No PDF files found in ./documents directory[/red]")
         chat.write(
             "[yellow]💡 Please add some PDF files to the ./documents directory.[/yellow]"
         )
@@ -562,13 +566,13 @@ class RAGChatApp(App):
         """Validate question and system state."""
         if not question.strip():
             return False
-            
+
         if not self.rag_service.rag_system.vectorstore:
             chat.write("[red]⚠️ Please load or create a database first.[/red]")
             return False
-            
+
         return True
-    
+
     def _display_user_question(self, question: str, chat) -> str:
         """Display user question with timestamp."""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -576,41 +580,44 @@ class RAGChatApp(App):
             question, title=f"👤 You [{timestamp}]", border_style="blue", padding=(0, 1)
         )
         chat.write(user_panel)
-        
+
         # Store the question for copying
         self.chat_messages.append(
             {"type": "user", "content": question, "timestamp": timestamp}
         )
-        
+
         return timestamp
-    
+
     async def _execute_query(self, question: str) -> dict:
         """Execute the query with timeout."""
         try:
             result = await asyncio.wait_for(
-                self.rag_service.query_service.process_query(question), 
-                timeout=60.0
+                self.rag_service.query_service.process_query(question), timeout=60.0
             )
             return result
         except asyncio.TimeoutError:
-            raise Exception("Query timed out after 60 seconds. Try disabling query expansion or reranking in settings.")
-    
+            raise Exception(
+                "Query timed out after 60 seconds. Try disabling query expansion or reranking in settings."
+            )
+
     def _display_context(self, context_docs: list, chat) -> None:
         """Display context documents if enabled."""
         show_context = self.settings_manager.get("show_context", False)
-        
+
         if not show_context or not context_docs:
             return
-            
+
         try:
             context_content = []
             for i, doc in enumerate(context_docs):
-                doc_content = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+                doc_content = (
+                    doc.page_content if hasattr(doc, "page_content") else str(doc)
+                )
                 # Truncate long content for display
                 if len(doc_content) > 500:
                     doc_content = doc_content[:500] + "..."
-                context_content.append(f"[bold]Document {i+1}:[/bold]\n{doc_content}")
-            
+                context_content.append(f"[bold]Document {i + 1}:[/bold]\n{doc_content}")
+
             if context_content:
                 context_text = "\n\n".join(context_content)
                 context_panel = Panel(
@@ -622,7 +629,7 @@ class RAGChatApp(App):
                 chat.write(context_panel)
         except Exception as e:
             chat.write(f"[red]Error displaying context: {str(e)}[/red]")
-    
+
     def _display_answer(self, answer: str, response_time: float, chat) -> None:
         """Display the assistant's answer."""
         assistant_panel = Panel(
@@ -632,7 +639,7 @@ class RAGChatApp(App):
             padding=(0, 1),
         )
         chat.write(assistant_panel)
-        
+
         # Store the answer for copying
         self.chat_messages.append(
             {
@@ -641,7 +648,7 @@ class RAGChatApp(App):
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
             }
         )
-    
+
     async def _handle_query_error(self, error: Exception, chat) -> None:
         """Handle and display query errors."""
         error_panel = Panel(
@@ -656,45 +663,49 @@ class RAGChatApp(App):
     async def _process_question(self, question: str) -> None:
         """Process user question with enhanced UI feedback."""
         chat = self.query_one("#chat", RichLog)
-        
+
         # Validate question and system state
         if not await self._validate_question(question, chat):
             return
-        
+
         # Display user question
         timestamp = self._display_user_question(question, chat)
-        
+
         # Update UI state
         self.processing = True
         self.update_progress("🤔 Thinking...", 50)
-        
+
         # Add to history
         history_content = self.query_one("#history-content", RichLog)
         history_content.write(f"[dim]{timestamp}[/dim] {question[:50]}...")
-        
+
         try:
             # Show processing indicator
             chat.write("[dim]🧠 Processing your question...[/dim]")
-            
+
             # Execute query
             start_time = time.time()
             result = await self._execute_query(question)
             response_time = time.time() - start_time
-            
+
             # Extract response and context
-            answer = result.get("response", "No response") if isinstance(result, dict) else str(result)
+            answer = (
+                result.get("response", "No response")
+                if isinstance(result, dict)
+                else str(result)
+            )
             context_docs = result.get("context", []) if isinstance(result, dict) else []
-            
+
             # Display context if enabled
             self._display_context(context_docs, chat)
-            
+
             # Display answer
             self._display_answer(answer, response_time, chat)
-            
+
             # Update chat history
             self.chat_history.add_exchange(question, answer)
             self.update_progress("✅ Response generated", 100)
-            
+
         except Exception as e:
             await self._handle_query_error(e, chat)
         finally:
@@ -745,7 +756,7 @@ class RAGChatApp(App):
         current_value = self.settings_manager.get("show_context", False)
         new_value = not current_value
         self.settings_manager.save_settings({"show_context": new_value})
-        
+
         chat = self.query_one("#chat", RichLog)
         status = "enabled" if new_value else "disabled"
         chat.write(f"[blue]ℹ Context display {status}[/blue]")
@@ -754,16 +765,19 @@ class RAGChatApp(App):
         """Clean HuggingFace cache to fix embedding issues."""
         chat = self.query_one("#chat", RichLog)
         chat.write("[yellow]🧹 Cleaning HuggingFace cache...[/yellow]")
-        
+
         try:
             # Clean the cache
             self.rag_service.database_service.cache_manager.clean_hf_cache_locks()
-            
+
             # Force garbage collection
             import gc
+
             gc.collect()
-            
-            chat.write("[green]✅ Cache cleaned successfully! You may want to reload the database (Ctrl+R).[/green]")
+
+            chat.write(
+                "[green]✅ Cache cleaned successfully! You may want to reload the database (Ctrl+R).[/green]"
+            )
         except Exception as e:
             chat.write(f"[red]❌ Failed to clean cache: {str(e)}[/red]")
 
@@ -789,11 +803,12 @@ class RAGChatApp(App):
         try:
             # Force garbage collection
             import gc
+
             gc.collect()
 
             # Reset the service
             self.rag_service.reset_system()
-            
+
             # Reinitialize the service with current settings
             self.rag_service = RAGService(settings_file="settings.json")
 
@@ -856,8 +871,12 @@ class RAGChatApp(App):
                 f.write("RAG Chat Export\n")
                 f.write("=" * 50 + "\n")
                 f.write(f"Exported: {datetime.now().isoformat()}\n")
-                f.write(f"Model: {self.rag_service.settings_manager.get("model_name", "unknown")}\n")
-                f.write(f"Temperature: {self.rag_service.settings_manager.get("temperature", 0.1)}\n")
+                f.write(
+                    f"Model: {self.rag_service.settings_manager.get('model_name', 'unknown')}\n"
+                )
+                f.write(
+                    f"Temperature: {self.rag_service.settings_manager.get('temperature', 0.1)}\n"
+                )
                 f.write("=" * 50 + "\n\n")
 
                 # Export actual chat messages
@@ -885,10 +904,18 @@ class RAGChatApp(App):
             export_data = {
                 "export_timestamp": datetime.now().isoformat(),
                 "model_settings": {
-                    "model": self.rag_service.settings_manager.get("model_name", "unknown"),
-                    "temperature": self.rag_service.settings_manager.get("temperature", 0.1),
-                    "chunk_size": self.rag_service.settings_manager.get("chunk_size", 1000),
-                    "retrieval_k": self.rag_service.settings_manager.get("retrieval_k", 3),
+                    "model": self.rag_service.settings_manager.get(
+                        "model_name", "unknown"
+                    ),
+                    "temperature": self.rag_service.settings_manager.get(
+                        "temperature", 0.1
+                    ),
+                    "chunk_size": self.rag_service.settings_manager.get(
+                        "chunk_size", 1000
+                    ),
+                    "retrieval_k": self.rag_service.settings_manager.get(
+                        "retrieval_k", 3
+                    ),
                 },
                 "sessions": self.chat_history.sessions,
                 "current_session": [
@@ -914,6 +941,7 @@ class RAGChatApp(App):
 
 if __name__ == "__main__":
     from rag_cli.utils.logger import RichLogger
+
     RichLogger.set_tui_mode(True)
     app = RAGChatApp()
     app.run()

@@ -5,9 +5,4 @@ from .query_service import QueryService
 from .database_service import DatabaseService
 from .chat_service import ChatService
 
-__all__ = [
-    'RAGService',
-    'QueryService', 
-    'DatabaseService',
-    'ChatService'
-]
+__all__ = ["RAGService", "QueryService", "DatabaseService", "ChatService"]

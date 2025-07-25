@@ -1,4 +1,5 @@
 """Help screen for RAG CLI application"""
+
 from typing import Any
 from textual.app import ComposeResult
 from textual.binding import Binding
