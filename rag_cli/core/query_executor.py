@@ -1,6 +1,6 @@
 """Query execution logic separated from RAGSystem for better modularity."""
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from langchain.schema import Document
 
 from rag_cli.utils.logger import RichLogger

@@ -1,7 +1,6 @@
 # LLM Manager Module
 import os
-from typing import Optional, Any, List
-from pathlib import Path
+from typing import Optional, List
 
 # Import our logger and defaults
 from rag_cli.utils.logger import RichLogger

@@ -1,7 +1,7 @@
 """Document management service for handling document operations."""
 
 from pathlib import Path
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Tuple, List, Dict, Any
 
 from rag_cli.utils.logger import RichLogger
 

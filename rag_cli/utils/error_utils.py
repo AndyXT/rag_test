@@ -1,9 +1,7 @@
 """Centralized error handling utilities."""
 
 from typing import Dict, Optional, Any
-from pathlib import Path
 
-from rag_cli.utils.logger import RichLogger
 
 
 class ErrorUtils:

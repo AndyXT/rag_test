@@ -5,7 +5,6 @@ import gc
 import resource
 from typing import Optional, List, Dict, Any
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
 from rag_cli.utils.logger import RichLogger

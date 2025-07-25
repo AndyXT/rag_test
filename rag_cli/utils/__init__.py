@@ -2,6 +2,8 @@
 
 from rag_cli.utils.constants import PYPERCLIP_AVAILABLE, pyperclip
 from rag_cli.utils.logger import RichLogger
-from rag_cli.utils.defaults import *
+# Import from defaults module
+from rag_cli.utils import defaults
 
-__all__ = ["PYPERCLIP_AVAILABLE", "pyperclip", "RichLogger"]
+# Re-export specific utilities
+__all__ = ["PYPERCLIP_AVAILABLE", "pyperclip", "RichLogger", "defaults"]

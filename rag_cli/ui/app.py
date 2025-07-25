@@ -4,7 +4,6 @@ import json
 import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pathlib import Path
 
 # Rich formatting imports
 from rich.table import Table

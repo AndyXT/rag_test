@@ -1,6 +1,5 @@
 """Rich console logger utility for consistent output formatting."""
 import logging
-import os
 from rich.console import Console
 from typing import Optional
 

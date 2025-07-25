@@ -4,9 +4,8 @@ import functools
 import time
 import asyncio
 import logging
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, TypeVar
 
-from rag_cli.utils.logger import RichLogger
 
 # Type variables for generic decorators
 F = TypeVar('F', bound=Callable[..., Any])

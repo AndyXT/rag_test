@@ -1,13 +1,13 @@
 """Service for handling query processing and retrieval"""
 
 import asyncio
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.documents import Document
 
 from rag_cli.utils.logger import RichLogger
-from rag_cli.utils.defaults import DEFAULT_TEMPERATURE, DEFAULT_RETRIEVAL_K
+from rag_cli.utils.defaults import DEFAULT_RETRIEVAL_K
 from rag_cli.core.query_processor import QueryProcessor
 from rag_cli.core.error_handler import ErrorHandler
 

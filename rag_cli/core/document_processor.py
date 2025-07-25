@@ -1,7 +1,7 @@
 """Document processing logic separated from VectorStoreManager."""
 
 from pathlib import Path
-from typing import List, Optional, Any, Callable
+from typing import List, Optional, Callable
 import gc
 
 from langchain.schema import Document

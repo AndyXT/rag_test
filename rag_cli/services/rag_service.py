@@ -1,7 +1,6 @@
 """Main RAG service that coordinates all operations"""
 
 from typing import Dict, Any, Optional, List
-from pathlib import Path
 
 from rag_cli.core.rag_system import RAGSystem
 from rag_cli.core.settings_manager import SettingsManager

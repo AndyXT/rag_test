@@ -4,7 +4,6 @@ ChromaDB Backup Manager
 A utility to manage ChromaDB backups and restore functionality.
 """
 
-import os
 import shutil
 import argparse
 from pathlib import Path
