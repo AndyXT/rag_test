@@ -129,7 +129,8 @@ class VectorStoreManager:
                     f"Creating embeddings for {len(all_documents)} chunks..."
                 )
 
-            # Get embeddings
+            # Initialize and get embeddings
+            self.embeddings_manager.initialize()
             embeddings = self.embeddings_manager.get_embeddings()
 
             # Create database using chroma manager

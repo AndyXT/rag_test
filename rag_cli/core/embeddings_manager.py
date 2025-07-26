@@ -132,6 +132,7 @@ class EmbeddingsManager:
                     RichLogger.warning(
                         f"Initial embedding initialization failed: {str(e)}"
                     )
+                    RichLogger.warning(f"Error type: {type(e).__name__}")
                     RichLogger.info("Attempting cache cleanup and retry...")
 
                     # More aggressive cleanup
@@ -188,7 +189,12 @@ class EmbeddingsManager:
     def get_embeddings(self):
         """Get the embeddings instance"""
         if self.embeddings is None:
-            raise RuntimeError("Embeddings not initialized. Call initialize() first.")
+            error_msg = (
+                f"Embeddings not initialized. Model: {self._embedding_model}. "
+                "Call initialize() first or check if initialization failed."
+            )
+            RichLogger.error(error_msg)
+            raise RuntimeError(error_msg)
         return self.embeddings
 
     def get_model_name(self):

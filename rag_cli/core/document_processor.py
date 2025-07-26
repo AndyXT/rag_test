@@ -115,7 +115,7 @@ class DocumentProcessor:
                 if progress_callback:
                     progress_callback(f"Loading: {pdf_file.name}")
 
-                docs = self.pdf_processor.load_pdf_incremental(str(pdf_file))
+                docs = self.pdf_processor.load_pdf(str(pdf_file))
                 documents.extend(docs)
 
             except Exception as e:

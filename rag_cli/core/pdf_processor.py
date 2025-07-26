@@ -7,6 +7,8 @@ from contextlib import contextmanager
 
 from langchain_community.document_loaders import PyPDFLoader
 
+from rag_cli.utils.logger import RichLogger
+
 
 class PDFProcessor:
     """Handles PDF processing and document extraction"""
@@ -84,6 +86,24 @@ class PDFProcessor:
         except Exception as pdf_error:
             self.failed_files.append(f"{pdf_file.name} ({str(pdf_error)[:50]}...)")
             gc.collect()  # Clean up even on error
+
+    def load_pdf(self, pdf_path: str) -> List[Any]:
+        """Load a single PDF file and return documents"""
+        pdf_file = Path(pdf_path)
+        documents = []
+        
+        try:
+            with self._pdf_loader_context(pdf_file) as loader:
+                documents = loader.load()
+                
+            # Force garbage collection after loading
+            gc.collect()
+            
+        except Exception as e:
+            RichLogger.error(f"Failed to load {pdf_file.name}: {str(e)}")
+            gc.collect()
+            
+        return documents if documents else []
 
     def _handle_no_documents_error(self) -> None:
         """Handle case where no documents could be processed"""
