@@ -124,7 +124,7 @@ class RAGService:
             # Save assistant response to history
             if save_to_history:
                 self.chat_service.add_assistant_message(
-                    content=result["answer"],
+                    content=result.get("answer", result.get("response", "")),
                     sources=result.get("source_documents", []),
                     context=result.get("context"),
                     method=result.get("method"),

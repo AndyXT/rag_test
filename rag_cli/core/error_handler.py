@@ -71,9 +71,9 @@ class ErrorHandler:
     def _classify_error(self, error: Exception, error_str: str) -> ErrorType:
         """Classify the error type based on the exception and message"""
 
-        # Connection errors
+        # Connection errors (must be actual connection issues, not just mentioning ollama)
         if any(
-            term in error_str.lower() for term in ["connection", "refused", "ollama"]
+            term in error_str.lower() for term in ["connection", "refused", "connect_error", "connection error"]
         ):
             return ErrorType.CONNECTION_ERROR
 

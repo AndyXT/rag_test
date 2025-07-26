@@ -6,6 +6,7 @@ handles model initialization, query expansion, and provides a unified interface 
 LLM operations.
 """
 import os
+import platform
 from typing import Optional, List, Any, Dict
 
 # Import our logger and defaults
@@ -18,10 +19,18 @@ from rag_cli.utils.defaults import (
 )
 
 # LangChain imports
-from langchain_ollama import OllamaLLM
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic  # type: ignore
+from langchain_ollama import OllamaLLM as BaseLangChainOllama
+from langchain_openai import ChatOpenAI as BaseLangChainOpenAI
+from langchain_anthropic import ChatAnthropic as BaseLangChainAnthropic  # type: ignore
 from langchain_core.language_models.base import BaseLanguageModel
+from pydantic import ConfigDict
+
+# Import torch only when needed
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 
 class LLMManager:
@@ -96,35 +105,27 @@ class LLMManager:
             else self.model_name
         )
 
-        try:
-            self.llm = OllamaLLM(
-                model=ollama_model,
-                temperature=self.temperature,
-                num_ctx=2048,  # Reduce context window to save memory
-                num_thread=1,  # Use single thread to avoid fd issues
-                keep_alive="5m",  # Keep model loaded for only 5 minutes to free memory faster
-            )
-            RichLogger.success(f"Initialized Ollama with model: {ollama_model}")
+        # Use the new OllamaLLM wrapper
+        self.llm = OllamaLLM(
+            model=ollama_model,
+            temperature=self.temperature,
+            num_ctx=2048,  # Reduce context window to save memory
+            num_thread=1,  # Use single thread to avoid fd issues
+            keep_alive="5m",  # Keep model loaded for only 5 minutes to free memory faster
+        )
 
-            # Check if this is a large model that might conflict with query expansion
-            large_models = LARGE_MODELS[:4]  # Use first 4 large models
-            if any(ollama_model.startswith(m) for m in large_models):
+        # Check if this is a large model that might conflict with query expansion
+        large_models = LARGE_MODELS[:4]  # Use first 4 large models
+        if any(ollama_model.startswith(m) for m in large_models):
+            RichLogger.warning(
+                f"Large model detected ({ollama_model}). Query expansion may cause memory issues."
+            )
+            if self.settings_manager and self.settings_manager.get(
+                "use_query_expansion", False
+            ):
                 RichLogger.warning(
-                    f"Large model detected ({ollama_model}). Query expansion may cause memory issues."
+                    "Consider disabling query expansion for better performance."
                 )
-                if self.settings_manager and self.settings_manager.get(
-                    "use_query_expansion", False
-                ):
-                    RichLogger.warning(
-                        "Consider disabling query expansion for better performance."
-                    )
-
-        except Exception:
-            # Fallback to simpler initialization
-            self.llm = OllamaLLM(model=ollama_model, temperature=self.temperature)
-            RichLogger.success(
-                f"Initialized Ollama (simple mode) with model: {ollama_model}"
-            )
 
     def _initialize_openai(self):
         """Initialize OpenAI LLM"""
@@ -143,15 +144,17 @@ class LLMManager:
                 "Set OPENAI_API_KEY environment variable or provide in settings."
             )
 
-        kwargs = {"model": model, "temperature": self.temperature, "api_key": api_key}
-
-        if api_base:
-            kwargs["base_url"] = api_base
-
-        self.llm = ChatOpenAI(**kwargs)
+        # Use the new OpenAILLM wrapper
+        self.llm = OpenAILLM(
+            model=model,
+            temperature=self.temperature,
+            api_key=api_key,
+            base_url=api_base if api_base else None,
+        )
+        
         api_source = "environment" if os.environ.get("OPENAI_API_KEY") else "settings"
-        RichLogger.success(
-            f"Initialized OpenAI with model: {model} (API key from {api_source})"
+        RichLogger.info(
+            f"(API key from {api_source})"
         )
 
     def _initialize_anthropic(self):
@@ -168,14 +171,18 @@ class LLMManager:
                 "Set ANTHROPIC_API_KEY environment variable or provide in settings."
             )
 
-        self.llm = ChatAnthropic(
-            model=model, temperature=self.temperature, api_key=api_key
+        # Use the new AnthropicLLM wrapper
+        self.llm = AnthropicLLM(
+            model=model,
+            temperature=self.temperature,
+            api_key=api_key
         )
+        
         api_source = (
             "environment" if os.environ.get("ANTHROPIC_API_KEY") else "settings"
         )
-        RichLogger.success(
-            f"Initialized Anthropic with model: {model} (API key from {api_source})"
+        RichLogger.info(
+            f"(API key from {api_source})"
         )
 
     def _initialize_unsloth(self):
@@ -189,15 +196,14 @@ class LLMManager:
         load_in_8bit = self.settings_manager.get("unsloth_8bit", False)
         
         # Check for CUDA availability
-        try:
-            import torch
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "Unsloth requires CUDA-capable GPU. No CUDA device found."
-                )
-        except ImportError:
+        if not TORCH_AVAILABLE:
             raise ImportError(
                 "PyTorch is required for Unsloth. Install it with: pip install torch"
+            )
+        
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "Unsloth requires CUDA-capable GPU. No CUDA device found."
             )
         
         try:
@@ -226,7 +232,6 @@ class LLMManager:
     def _initialize_mlx(self):
         """Initialize MLX LLM for Apple Silicon"""
         # Check platform
-        import platform
         if platform.system() != "Darwin":
             raise RuntimeError(
                 "MLX is only supported on macOS. Current platform: " + platform.system()
@@ -418,7 +423,364 @@ Queries:"""
         else:
             return str(response)
 
-class UnslothLLM(BaseLanguageModel):
+class BaseLLMWrapper(BaseLanguageModel):
+    """Base wrapper class that implements common LangChain interface methods"""
+    
+    model_config = ConfigDict(extra='allow', arbitrary_types_allowed=True)
+    
+    def generate_prompt(self, prompts: List[str], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+        """Generate from multiple prompts"""
+        return [self._call(prompt, stop, **kwargs) for prompt in prompts]
+    
+    async def agenerate_prompt(self, prompts: List[str], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+        """Async generate from multiple prompts"""
+        return [await self._acall(prompt, stop, **kwargs) for prompt in prompts]
+    
+    def predict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """Predict from text"""
+        return self._call(text, stop, **kwargs)
+    
+    async def apredict(self, text: str, stop: Optional[List[str]] = None, **kwargs: Any) -> str:
+        """Async predict from text"""
+        return await self._acall(text, stop, **kwargs)
+    
+    def predict_messages(self, messages: List[Any], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+        """Predict from messages"""
+        # Convert messages to a single prompt
+        prompt = "\n".join([f"{msg.type}: {msg.content}" if hasattr(msg, 'type') else str(msg) for msg in messages])
+        return self._call(prompt, stop, **kwargs)
+    
+    async def apredict_messages(self, messages: List[Any], stop: Optional[List[str]] = None, **kwargs: Any) -> Any:
+        """Async predict from messages"""
+        # Convert messages to a single prompt
+        prompt = "\n".join([f"{msg.type}: {msg.content}" if hasattr(msg, 'type') else str(msg) for msg in messages])
+        return await self._acall(prompt, stop, **kwargs)
+    
+    def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> str:
+        """Invoke the model - implements BaseLanguageModel interface"""
+        # Handle different input types
+        if isinstance(input, str):
+            prompt = input
+        elif isinstance(input, dict) and "input" in input:
+            prompt = input["input"]
+        elif isinstance(input, list) and len(input) > 0:
+            # Handle message list
+            prompt = input[-1].content if hasattr(input[-1], 'content') else str(input[-1])
+        else:
+            prompt = str(input)
+        
+        return self._call(prompt, **kwargs)
+
+
+class OllamaLLM(BaseLLMWrapper):
+    """Custom LangChain wrapper for Ollama models with consistent interface"""
+    
+    def __init__(
+        self,
+        model: str = DEFAULT_OLLAMA_MODEL,
+        temperature: float = 0.1,
+        num_ctx: int = 2048,
+        num_thread: int = 1,
+        keep_alive: str = "5m",
+        **kwargs
+    ):
+        """Initialize Ollama model wrapper
+        
+        Args:
+            model: Ollama model name
+            temperature: Generation temperature
+            num_ctx: Context window size
+            num_thread: Number of threads
+            keep_alive: How long to keep model loaded
+        """
+        super().__init__()
+        self.model = model
+        self.temperature = temperature
+        self.num_ctx = num_ctx
+        self.num_thread = num_thread
+        self.keep_alive = keep_alive
+        self._llm = None
+        self._initialize_model()
+    
+    def _initialize_model(self):
+        """Initialize the underlying Ollama model"""
+        try:
+            self._llm = BaseLangChainOllama(
+                model=self.model,
+                temperature=self.temperature,
+                num_ctx=self.num_ctx,
+                num_thread=self.num_thread,
+                keep_alive=self.keep_alive,
+            )
+            RichLogger.success(f"Initialized Ollama with model: {self.model}")
+        except Exception:
+            # Fallback to simpler initialization
+            self._llm = BaseLangChainOllama(
+                model=self.model,
+                temperature=self.temperature
+            )
+            RichLogger.success(f"Initialized Ollama (simple mode) with model: {self.model}")
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Generate text from prompt"""
+        if not self._llm:
+            raise RuntimeError("Model not initialized")
+        
+        # Use invoke method for OllamaLLM
+        try:
+            return self._llm.invoke(prompt, stop=stop, **kwargs)
+        except Exception as e:
+            # Re-raise the original exception to preserve error type
+            raise e
+    
+    async def _acall(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Async generation"""
+        if not self._llm:
+            raise RuntimeError("Model not initialized")
+        
+        # Use ainvoke method for async OllamaLLM
+        try:
+            return await self._llm.ainvoke(prompt, stop=stop, **kwargs)
+        except Exception as e:
+            # Re-raise the original exception to preserve error type
+            raise e
+    
+    @property
+    def _llm_type(self) -> str:
+        """Return identifier for this LLM"""
+        return "ollama"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        """Return model parameters for identification"""
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "num_ctx": self.num_ctx,
+            "num_thread": self.num_thread,
+            "keep_alive": self.keep_alive,
+        }
+    
+
+
+class OpenAILLM(BaseLLMWrapper):
+    """Custom LangChain wrapper for OpenAI models with consistent interface"""
+    
+    def __init__(
+        self,
+        model: str = "gpt-3.5-turbo",
+        temperature: float = 0.1,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        **kwargs
+    ):
+        """Initialize OpenAI model wrapper
+        
+        Args:
+            model: OpenAI model name
+            temperature: Generation temperature
+            api_key: OpenAI API key
+            base_url: Optional base URL for API
+        """
+        super().__init__()
+        self.model = model
+        self.temperature = temperature
+        self.api_key = api_key
+        self.base_url = base_url
+        self._llm = None
+        self._initialize_model()
+    
+    def _initialize_model(self):
+        """Initialize the underlying OpenAI model"""
+        if not self.api_key or not self.api_key.strip():
+            raise ValueError(
+                "OpenAI API key is required but is missing or contains only whitespace."
+            )
+        
+        kwargs = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "api_key": self.api_key
+        }
+        
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        
+        self._llm = BaseLangChainOpenAI(**kwargs)
+        RichLogger.success(f"Initialized OpenAI with model: {self.model}")
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Generate text from prompt"""
+        if not self._llm:
+            raise RuntimeError("Model not initialized")
+        
+        response = self._llm.invoke(prompt, stop=stop, **kwargs)
+        
+        # Handle ChatOpenAI response format
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+    
+    async def _acall(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Async generation"""
+        if not self._llm:
+            raise RuntimeError("Model not initialized")
+        
+        response = await self._llm.ainvoke(prompt, stop=stop, **kwargs)
+        
+        # Handle ChatOpenAI response format
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+    
+    @property
+    def _llm_type(self) -> str:
+        """Return identifier for this LLM"""
+        return "openai"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        """Return model parameters for identification"""
+        params = {
+            "model": self.model,
+            "temperature": self.temperature,
+        }
+        if self.base_url:
+            params["base_url"] = self.base_url
+        return params
+    
+    def invoke(self, prompt: str, **kwargs) -> str:
+        """Invoke the model - implements BaseLanguageModel interface"""
+        response = self._llm.invoke(prompt, **kwargs)
+        
+        # Handle ChatOpenAI response format
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+
+
+class AnthropicLLM(BaseLLMWrapper):
+    """Custom LangChain wrapper for Anthropic models with consistent interface"""
+    
+    def __init__(
+        self,
+        model: str = "claude-3-haiku-20240307",
+        temperature: float = 0.1,
+        api_key: Optional[str] = None,
+        **kwargs
+    ):
+        """Initialize Anthropic model wrapper
+        
+        Args:
+            model: Anthropic model name
+            temperature: Generation temperature
+            api_key: Anthropic API key
+        """
+        super().__init__()
+        self.model = model
+        self.temperature = temperature
+        self.api_key = api_key
+        self._llm = None
+        self._initialize_model()
+    
+    def _initialize_model(self):
+        """Initialize the underlying Anthropic model"""
+        if not self.api_key or not self.api_key.strip():
+            raise ValueError(
+                "Anthropic API key is required but not provided."
+            )
+        
+        self._llm = BaseLangChainAnthropic(
+            model=self.model,
+            temperature=self.temperature,
+            api_key=self.api_key
+        )
+        RichLogger.success(f"Initialized Anthropic with model: {self.model}")
+    
+    def _call(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Generate text from prompt"""
+        if not self._llm:
+            raise RuntimeError("Model not initialized")
+        
+        response = self._llm.invoke(prompt, stop=stop, **kwargs)
+        
+        # Handle ChatAnthropic response format
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+    
+    async def _acall(
+        self,
+        prompt: str,
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> str:
+        """Async generation"""
+        if not self._llm:
+            raise RuntimeError("Model not initialized")
+        
+        response = await self._llm.ainvoke(prompt, stop=stop, **kwargs)
+        
+        # Handle ChatAnthropic response format
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+    
+    @property
+    def _llm_type(self) -> str:
+        """Return identifier for this LLM"""
+        return "anthropic"
+    
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        """Return model parameters for identification"""
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+        }
+    
+    def invoke(self, prompt: str, **kwargs) -> str:
+        """Invoke the model - implements BaseLanguageModel interface"""
+        response = self._llm.invoke(prompt, **kwargs)
+        
+        # Handle ChatAnthropic response format
+        if hasattr(response, "content"):
+            return response.content
+        return str(response)
+
+
+class UnslothLLM(BaseLLMWrapper):
     """Custom LangChain wrapper for Unsloth models"""
     
     def __init__(
@@ -501,6 +863,7 @@ class UnslothLLM(BaseLanguageModel):
             ).to(self.model.device)
             
             # Generate response
+            import torch
             with torch.no_grad():
                 outputs = self.model.generate(
                     **inputs,
@@ -552,11 +915,8 @@ class UnslothLLM(BaseLanguageModel):
             "load_in_8bit": self.load_in_8bit,
         }
     
-    def invoke(self, prompt: str, **kwargs) -> str:
-        """Invoke the model - implements BaseLanguageModel interface"""
-        return self._call(prompt, **kwargs)
 
-class MLXLLM(BaseLanguageModel):
+class MLXLLM(BaseLLMWrapper):
     """Custom LangChain wrapper for MLX models on Apple Silicon"""
     
     def __init__(
@@ -593,9 +953,8 @@ class MLXLLM(BaseLanguageModel):
                     "MLX requires Apple Silicon Mac. Detected non-Apple Silicon system."
                 )
             
-            import mlx
             import mlx.core as mx
-            from mlx_lm import load, generate
+            from mlx_lm import load
             
             RichLogger.info(f"Loading MLX model from: {self.model_path}")
             
@@ -673,6 +1032,3 @@ class MLXLLM(BaseLanguageModel):
             "seed": self.seed,
         }
     
-    def invoke(self, prompt: str, **kwargs) -> str:
-        """Invoke the model - implements BaseLanguageModel interface"""
-        return self._call(prompt, **kwargs)

@@ -23,7 +23,6 @@ from textual.reactive import reactive
 
 # Internal imports
 from rag_cli.core.settings_manager import SettingsManager
-from rag_cli.core.chat_history import ChatHistory
 from rag_cli.services.rag_service import RAGService
 from rag_cli.ui.screens.settings_screen import SettingsScreen
 from rag_cli.ui.screens.help_screen import HelpScreen
@@ -233,7 +232,6 @@ class RAGChatApp(App):
         self.settings_manager = SettingsManager()
         # Initialize RAG service
         self.rag_service = RAGService(settings_file="settings.json")
-        self.chat_history = ChatHistory()
         self.current_progress = 0
         self.progress_timer: Optional[Any] = None
         self.chat_messages: List[
@@ -603,7 +601,7 @@ class RAGChatApp(App):
         """Execute the query with timeout."""
         try:
             result = await asyncio.wait_for(
-                self.rag_service.query_service.process_query(question), timeout=60.0
+                self.rag_service.process_query(question), timeout=60.0
             )
             return result
         except asyncio.TimeoutError as exc:
@@ -714,8 +712,8 @@ class RAGChatApp(App):
             # Display answer
             self._display_answer(answer, response_time, chat)
 
-            # Update chat history
-            self.chat_history.add_exchange(question, answer)
+            # Update chat history - removed the old chat_history.add_exchange call
+            # The RAGService already handles saving to chat history via ChatService
             self.update_progress("✅ Response generated", 100)
 
         except Exception as e:
@@ -798,14 +796,14 @@ class RAGChatApp(App):
 
     def action_new_session(self) -> None:
         """Start a new chat session."""
-        self.chat_history.start_new_session()
+        # Use the service layer to start a new session
+        self.rag_service.start_new_session()
         self.action_clear_chat()
 
         # Update history panel
         history_content = self.query_one("#history-content", RichLog)
         history_content.clear()
         history_content.write("[green]🆕 New session started[/green]")
-
     async def action_quit(self) -> None:
         """Quit the application."""
         self.exit()
@@ -912,46 +910,18 @@ class RAGChatApp(App):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"full_chat_history_{timestamp}.json"
 
-            # Save current session first
-            self.chat_history.start_new_session()
-
-            # Export all sessions
-            export_data = {
-                "export_timestamp": datetime.now().isoformat(),
-                "model_settings": {
-                    "model": self.rag_service.settings_manager.get(
-                        "model_name", "unknown"
-                    ),
-                    "temperature": self.rag_service.settings_manager.get(
-                        "temperature", 0.1
-                    ),
-                    "chunk_size": self.rag_service.settings_manager.get(
-                        "chunk_size", 1000
-                    ),
-                    "retrieval_k": self.rag_service.settings_manager.get(
-                        "retrieval_k", 3
-                    ),
-                },
-                "sessions": self.chat_history.sessions,
-                "current_session": [
-                    {
-                        "timestamp": msg["timestamp"],
-                        "type": msg["type"],
-                        "content": msg["content"],
-                    }
-                    for msg in self.chat_messages
-                ],
-            }
-
+            # Use the service layer to export
+            result = self.rag_service.export_chat()
+            
+            # Save to file
             with open(filename, "w", encoding="utf-8") as f:
-                json.dump(export_data, f, indent=2)
+                f.write(result)
 
             chat = self.query_one("#chat", RichLog)
             chat.write(f"[green]📁 Full chat history exported to {filename}[/green]")
-
         except Exception as e:
             chat = self.query_one("#chat", RichLog)
-            chat.write(f"[red]❌ Full export failed: {str(e)}[/red]")
+            chat.write(f"[red]❌ Export failed: {str(e)}[/red]")
 
 
 if __name__ == "__main__":
