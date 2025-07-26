@@ -107,12 +107,11 @@ class ChatService:
         # Get recent messages
         recent_messages = self.current_session[-max_messages:]
 
-        # Format as conversation
-        context_parts = []
-        for msg in recent_messages:
-            role = msg["role"].capitalize()
-            content = msg["content"]
-            context_parts.append(f"{role}: {content}")
+        # Use list comprehension for more efficient formatting
+        context_parts = [
+            f"{msg['role'].capitalize()}: {msg['content']}"
+            for msg in recent_messages
+        ]
 
         return "\n\n".join(context_parts)
 
@@ -235,7 +234,8 @@ class ChatService:
 
     def _format_session_as_markdown(self, session: Dict[str, Any]) -> str:
         """Format a session as markdown"""
-        lines = [
+        # Build header
+        header = [
             f"# {session['title']}",
             f"*Created: {session['created_at']}*",
             "",
@@ -243,28 +243,35 @@ class ChatService:
             "",
         ]
 
-        for msg in session["messages"]:
-            role = msg["role"].capitalize()
-            content = msg["content"]
-            timestamp = msg["timestamp"]
-
-            lines.append(f"### {role}")
-            lines.append(f"*{timestamp}*")
-            lines.append("")
-            lines.append(content)
-
-            # Add metadata if present
+        # Build message sections using list comprehension
+        def format_message(msg: Dict[str, Any]) -> List[str]:
+            sections = [
+                f"### {msg['role'].capitalize()}",
+                f"*{msg['timestamp']}*",
+                "",
+                msg['content'],
+            ]
+            
+            # Add sources if present
             if msg.get("metadata", {}).get("sources"):
-                lines.append("")
-                lines.append("**Sources:**")
-                for i, source in enumerate(msg["metadata"]["sources"]):
-                    lines.append(f"{i + 1}. {source['content']}")
+                sections.extend([
+                    "",
+                    "**Sources:**",
+                    *[f"{i + 1}. {source['content']}" 
+                      for i, source in enumerate(msg["metadata"]["sources"])]
+                ])
+            
+            sections.extend(["", "---", ""])
+            return sections
+        
+        # Flatten all message sections
+        message_lines = [
+            line
+            for msg in session["messages"]
+            for line in format_message(msg)
+        ]
 
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-
-        return "\n".join(lines)
+        return "\n".join(header + message_lines)
 
     def _save_current_session(self, title: Optional[str] = None) -> None:
         """Save current session to history"""

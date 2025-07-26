@@ -103,24 +103,25 @@ Improved question:"""
         if not documents:
             return ""
 
-        context_parts = []
-
-        for i, doc in enumerate(documents):
-            # Add document separator
-            context_parts.append(f"[Document {i + 1}]")
-
-            # Add content
-            content = doc.page_content.strip()
-            context_parts.append(content)
-
+        # Use list comprehension to build context parts more efficiently
+        def format_document(i: int, doc: Document) -> List[str]:
+            parts = [f"[Document {i + 1}]", doc.page_content.strip()]
+            
             # Add metadata if available
             if hasattr(doc, "metadata") and doc.metadata:
                 metadata_str = self._format_metadata(doc.metadata)
                 if metadata_str:
-                    context_parts.append(f"Metadata: {metadata_str}")
-
-            # Add blank line between documents
-            context_parts.append("")
+                    parts.append(f"Metadata: {metadata_str}")
+            
+            parts.append("")  # Blank line
+            return parts
+        
+        # Flatten the list of lists into a single list
+        context_parts = [
+            part 
+            for i, doc in enumerate(documents) 
+            for part in format_document(i, doc)
+        ]
 
         return "\n".join(context_parts).strip()
 
@@ -219,7 +220,7 @@ Answer: """
         self, documents: List[Document], similarity_threshold: float = 0.9
     ) -> List[Document]:
         """
-        Remove duplicate or highly similar documents
+        Remove duplicate or highly similar documents using hash-based approach
 
         Args:
             documents: Documents to deduplicate
@@ -231,24 +232,42 @@ Answer: """
         if len(documents) <= 1:
             return documents
 
-        unique_docs = [documents[0]]
-
-        for doc in documents[1:]:
-            is_duplicate = False
-
-            for unique_doc in unique_docs:
-                # Simple content-based deduplication
-                if (
-                    self._calculate_similarity(
-                        doc.page_content, unique_doc.page_content
-                    )
-                    > similarity_threshold
-                ):
-                    is_duplicate = True
-                    break
-
-            if not is_duplicate:
+        # Use a hash-based approach for exact duplicates first
+        seen_hashes = set()
+        unique_docs = []
+        
+        # First pass: remove exact duplicates using hash
+        for doc in documents:
+            content_hash = hash(doc.page_content)
+            if content_hash not in seen_hashes:
+                seen_hashes.add(content_hash)
                 unique_docs.append(doc)
+        
+        # Second pass: remove similar documents if threshold is less than 1.0
+        if similarity_threshold < 1.0 and len(unique_docs) > 1:
+            # Use a more efficient approach with early termination
+            final_docs = [unique_docs[0]]
+            
+            for doc in unique_docs[1:]:
+                # Check similarity only with a sliding window of recent documents
+                # This reduces comparisons while maintaining quality
+                window_size = min(10, len(final_docs))  # Compare with last 10 docs max
+                is_duplicate = False
+                
+                for i in range(len(final_docs) - 1, max(-1, len(final_docs) - window_size - 1), -1):
+                    if (
+                        self._calculate_similarity(
+                            doc.page_content, final_docs[i].page_content
+                        )
+                        > similarity_threshold
+                    ):
+                        is_duplicate = True
+                        break
+                
+                if not is_duplicate:
+                    final_docs.append(doc)
+            
+            unique_docs = final_docs
 
         if len(unique_docs) < len(documents):
             RichLogger.info(

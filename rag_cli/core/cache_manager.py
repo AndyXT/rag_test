@@ -28,35 +28,56 @@ class CacheManager:
             if not cache_dir.exists():
                 return 0
 
-            cleaned_files = []
+            cleaned_count = 0
+            current_time = time.time()
             lock_age_threshold = 300 if aggressive else 1800  # 5 or 30 minutes
+            threshold_time = current_time - lock_age_threshold
 
-            # Clean lock files and temp files
-            for pattern in ["*.lock", "*.tmp*", "tmp_*", "*~"]:
-                for lock_file in cache_dir.rglob(pattern):
-                    try:
-                        # Remove lock files older than threshold
-                        if lock_file.stat().st_mtime < (
-                            time.time() - lock_age_threshold
-                        ):
-                            lock_file.unlink()
-                            cleaned_files.append(lock_file.name)
-                    except Exception:
-                        pass  # Non-critical - lock file may be in use
+            # Get all files once to avoid multiple filesystem traversals
+            all_files = list(cache_dir.rglob("*"))
+            
+            # Define patterns to match
+            patterns = ["*.lock", "*.tmp*", "tmp_*", "*~"]
+            
+            # Process files in a single pass
+            files_to_remove = []
+            
+            for file_path in all_files:
+                if not file_path.is_file():
+                    continue
+                    
+                try:
+                    file_stat = file_path.stat()
+                    should_remove = False
+                    
+                    # Check if file matches any cleanup pattern
+                    for pattern in patterns:
+                        if file_path.match(pattern) and file_stat.st_mtime < threshold_time:
+                            should_remove = True
+                            break
+                    
+                    # Check for zero-byte files
+                    if not should_remove and file_stat.st_size == 0:
+                        should_remove = True
+                    
+                    if should_remove:
+                        files_to_remove.append(file_path)
+                        
+                except Exception:
+                    pass  # Skip files we can't stat
+            
+            # Remove files in batch
+            for file_path in files_to_remove:
+                try:
+                    file_path.unlink()
+                    cleaned_count += 1
+                except Exception:
+                    pass  # Non-critical - file may be in use
 
-            # Clean zero-byte files
-            for file_path in cache_dir.rglob("*"):
-                if file_path.is_file() and file_path.stat().st_size == 0:
-                    try:
-                        file_path.unlink()
-                        cleaned_files.append(f"{file_path.name} (0 bytes)")
-                    except Exception:
-                        pass
+            if cleaned_count > 0:
+                RichLogger.success(f"Cleaned {cleaned_count} cache files")
 
-            if cleaned_files:
-                RichLogger.success(f"Cleaned {len(cleaned_files)} cache files")
-
-            return len(cleaned_files)
+            return cleaned_count
 
         except Exception as e:
             RichLogger.warning(f"Could not clean cache locks: {str(e)}")

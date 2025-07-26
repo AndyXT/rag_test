@@ -14,6 +14,8 @@ class SettingsManager:
 
     def __init__(self, settings_file: str = DEFAULT_SETTINGS_FILE):
         self.settings_file = settings_file
+        self._file_exists_cache = None  # Cache file existence check
+        self._last_mtime = None  # Cache file modification time
         self.default_settings = {
             "ollama_model": "llama3.2:3b",
             "temperature": 0.1,
@@ -38,13 +40,25 @@ class SettingsManager:
         self.settings = self.load_settings()
 
     def load_settings(self) -> Dict[str, Any]:
-        """Load settings from file or return defaults"""
+        """Load settings from file or return defaults with caching"""
         try:
-            if os.path.exists(self.settings_file):
-                with open(self.settings_file, "r", encoding="utf-8") as f:
-                    loaded = json.load(f)
-                    # Merge with defaults to handle missing keys
-                    return {**self.default_settings, **loaded}
+            # Check cache first
+            if self._file_exists_cache is None:
+                self._file_exists_cache = os.path.exists(self.settings_file)
+            
+            if self._file_exists_cache:
+                # Check if file has been modified
+                current_mtime = os.path.getmtime(self.settings_file)
+                if self._last_mtime != current_mtime:
+                    with open(self.settings_file, "r", encoding="utf-8") as f:
+                        loaded = json.load(f)
+                        # Update cache
+                        self._last_mtime = current_mtime
+                        # Merge with defaults to handle missing keys
+                        return {**self.default_settings, **loaded}
+                # If file hasn't changed and we have settings, return them
+                elif hasattr(self, 'settings') and self.settings:
+                    return self.settings
         except (
             IOError,
             OSError,
@@ -57,7 +71,9 @@ class SettingsManager:
             RichLogger.warning(
                 f"Could not load settings from {self.settings_file}: {e}"
             )
-            pass
+            # Invalidate cache on error
+            self._file_exists_cache = False
+            self._last_mtime = None
         return self.default_settings.copy()
 
     def save_settings(self, settings: Dict[str, Any]) -> bool:

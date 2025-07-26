@@ -47,26 +47,46 @@ class EmbeddingsManager:
                 return
 
             cleaned_files = []
+            current_time = time.time()
+            threshold_time = current_time - 300  # 5 minutes
 
-            # Clean lock files and temp files
-            for pattern in ["*.lock", "*.tmp*", "tmp_*", "*~"]:
-                for lock_file in cache_dir.rglob(pattern):
-                    try:
-                        # Remove any lock files older than 5 minutes (more aggressive)
-                        if lock_file.stat().st_mtime < (time.time() - 300):
-                            lock_file.unlink()
-                            cleaned_files.append(lock_file.name)
-                    except Exception:
-                        pass  # Non-critical - lock file may be in use
-
-            # Clean zero-byte files
-            for file_path in cache_dir.rglob("*"):
-                if file_path.is_file() and file_path.stat().st_size == 0:
-                    try:
+            # Collect all files in a single pass
+            all_files = list(cache_dir.rglob("*"))
+            
+            # Process files in batches by type
+            patterns = ["*.lock", "*.tmp*", "tmp_*", "*~"]
+            
+            # Filter and process files efficiently
+            for file_path in all_files:
+                if not file_path.is_file():
+                    continue
+                    
+                try:
+                    # Check if file matches any pattern or is zero-byte
+                    file_name = file_path.name
+                    should_remove = False
+                    
+                    # Check patterns
+                    for pattern in patterns:
+                        if file_path.match(pattern):
+                            # Check age only for pattern-matched files
+                            if file_path.stat().st_mtime < threshold_time:
+                                should_remove = True
+                                break
+                    
+                    # Check zero-byte files
+                    if not should_remove and file_path.stat().st_size == 0:
+                        should_remove = True
+                        cleaned_files.append(f"{file_name} (0 bytes)")
+                    elif should_remove:
+                        cleaned_files.append(file_name)
+                    
+                    # Remove file if needed
+                    if should_remove:
                         file_path.unlink()
-                        cleaned_files.append(f"{file_path.name} (0 bytes)")
-                    except Exception:
-                        pass
+                        
+                except Exception:
+                    pass  # Non-critical - file may be in use
 
             if cleaned_files:
                 RichLogger.success(
