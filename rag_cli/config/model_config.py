@@ -24,11 +24,40 @@ ANTHROPIC_MODELS = {
     "large": "claude-3-opus-20240229",
 }
 
+# Unsloth models (GPU-accelerated quantized models)
+UNSLOTH_MODELS = {
+    "default": "unsloth/Qwen2.5-Coder-14B-Instruct",
+    "small": "unsloth/Llama-3.2-3B",
+    "medium": "unsloth/mistral-7b-instruct-v0.3",
+    "large": "unsloth/Qwen2.5-Coder-14B-Instruct",
+    "phi": "unsloth/Phi-4",
+    "llama-8b": "unsloth/Llama-3.1-8B",
+    "gemma-4b": "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
+    "gemma-12b": "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
+    "gemma-27b": "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
+    "qwen-4b": "unsloth/Qwen3-4B-unsloth-bnb-4bit",
+    "qwen-8b": "unsloth/Qwen3-8B-unsloth-bnb-4bit",
+}
+
+# MLX models (Apple Silicon optimized)
+MLX_MODELS = {
+    "default": "mistral-7b-instruct",
+    "mistral-7b": "mistral-7b-instruct",
+    "mistral-7b-4bit": "Mistral-7B-Instruct-v0.2-4bit",
+    "llama-3b": "Llama-3.2-3B-Instruct-4bit",
+    "phi-3": "Phi-3-mini-4k-instruct-4bit",
+    "qwen-7b": "Qwen2.5-7B-Instruct-4bit",
+    "gemma-2b": "gemma-2b-it-4bit",
+    "starcoder-1b": "starcoder-1b-4bit",
+}
+
 # Default model (for backward compatibility)
 DEFAULT_MODEL = OLLAMA_MODELS["default"]
 DEFAULT_OLLAMA_MODEL = OLLAMA_MODELS["default"]
 DEFAULT_OPENAI_MODEL = OPENAI_MODELS["default"]
 DEFAULT_ANTHROPIC_MODEL = ANTHROPIC_MODELS["default"]
+DEFAULT_UNSLOTH_MODEL = UNSLOTH_MODELS["default"]
+DEFAULT_MLX_MODEL = MLX_MODELS["default"]
 
 # Embedding models
 EMBEDDING_MODELS = {
@@ -109,5 +138,28 @@ MODEL_CAPABILITIES = {
         "gpt-4-32k",
         "yi:34b",
         "qwen2.5:32b",
+        "unsloth/Qwen2.5-Coder-14B-Instruct",
+        "unsloth/Qwen3-8B-unsloth-bnb-4bit",
+    ],
+    "supports_gpu_acceleration": [
+        "unsloth/Qwen2.5-Coder-14B-Instruct",
+        "unsloth/Llama-3.1-8B",
+        "unsloth/Llama-3.2-3B",
+        "unsloth/mistral-7b-instruct-v0.3",
+        "unsloth/Phi-4",
+        "unsloth/gemma-3-4b-it-unsloth-bnb-4bit",
+        "unsloth/gemma-3-12b-it-unsloth-bnb-4bit",
+        "unsloth/gemma-3-27b-it-unsloth-bnb-4bit",
+        "unsloth/Qwen3-4B-unsloth-bnb-4bit",
+        "unsloth/Qwen3-8B-unsloth-bnb-4bit",
+    ],
+    "supports_apple_silicon": [
+        "mistral-7b-instruct",
+        "Mistral-7B-Instruct-v0.2-4bit",
+        "Llama-3.2-3B-Instruct-4bit",
+        "Phi-3-mini-4k-instruct-4bit",
+        "Qwen2.5-7B-Instruct-4bit",
+        "gemma-2b-it-4bit",
+        "starcoder-1b-4bit",
     ],
 }

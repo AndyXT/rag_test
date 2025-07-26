@@ -27,3 +27,14 @@ pyperclip>=1.9.0,<2.0.0
 
 # Optional: Ollama client (for local models)
 ollama>=0.5.1,<1.0.0
+
+# Optional: Unsloth for GPU-accelerated inference
+# Note: Unsloth requires a CUDA-capable GPU
+# Install with: pip install "unsloth[cu121]" for CUDA 12.1
+# or pip install "unsloth[cu118]" for CUDA 11.8
+# unsloth>=2024.11.7  # Uncomment if using GPU acceleration
+
+# Optional: MLX for Apple Silicon Mac acceleration
+# Note: MLX requires Apple Silicon Mac (M1/M2/M3)
+# mlx>=0.22.0  # Uncomment if using Apple Silicon
+# mlx-lm>=0.21.0  # MLX language model utilities

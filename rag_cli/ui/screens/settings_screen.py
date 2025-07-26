@@ -80,6 +80,31 @@ class SettingsScreen(ModalScreen):
         self.query_one("#anthropic-model-input", Input).value = str(
             settings.get("anthropic_model", "claude-3-haiku-20240307")
         )
+        
+        # Update Unsloth settings
+        self.query_one("#unsloth-model-input", Input).value = str(
+            settings.get("unsloth_model", "unsloth/Qwen2.5-Coder-14B-Instruct")
+        )
+        self.query_one("#unsloth-seq-input", Input).value = str(
+            settings.get("unsloth_max_seq_length", 8192)
+        )
+        self.query_one("#unsloth-4bit-switch", Switch).value = settings.get(
+            "unsloth_4bit", True
+        )
+        self.query_one("#unsloth-8bit-switch", Switch).value = settings.get(
+            "unsloth_8bit", False
+        )
+        
+        # Update MLX settings
+        self.query_one("#mlx-path-input", Input).value = str(
+            settings.get("mlx_model_path", "~/.cache/mlx_models/mistral-7b-instruct")
+        )
+        self.query_one("#mlx-tokens-input", Input).value = str(
+            settings.get("mlx_max_tokens", 2048)
+        )
+        self.query_one("#mlx-seed-input", Input).value = str(
+            settings.get("mlx_seed", 42)
+        )
 
         # Update reranker settings
         self.query_one("#use-reranker-switch", Switch).value = settings.get(
@@ -122,6 +147,8 @@ class SettingsScreen(ModalScreen):
                         ("Ollama (Local)", "ollama"),
                         ("OpenAI API", "openai"),
                         ("Anthropic API", "anthropic"),
+                        ("Unsloth (GPU)", "unsloth"),
+                        ("MLX (Mac)", "mlx"),
                     ],
                     value="ollama",
                     id="provider-select",
@@ -259,6 +286,70 @@ class SettingsScreen(ModalScreen):
 
                 yield Static("")  # Spacer
 
+                # Unsloth-specific settings
+                yield Label(
+                    "Unsloth Model:", id="unsloth-model-label", classes="unsloth-field"
+                )
+                yield Input(
+                    value="unsloth/Qwen2.5-Coder-14B-Instruct",
+                    placeholder="Unsloth model name",
+                    id="unsloth-model-input",
+                    classes="unsloth-field",
+                )
+
+                yield Label(
+                    "Max Sequence Length:", id="unsloth-seq-label", classes="unsloth-field"
+                )
+                yield Input(
+                    value="8192",
+                    placeholder="Maximum sequence length",
+                    id="unsloth-seq-input",
+                    classes="unsloth-field",
+                )
+
+                with Horizontal(classes="unsloth-field"):
+                    yield Switch(value=True, id="unsloth-4bit-switch")
+                    yield Label("Use 4-bit quantization (lower memory)")
+
+                with Horizontal(classes="unsloth-field"):
+                    yield Switch(value=False, id="unsloth-8bit-switch")
+                    yield Label("Use 8-bit quantization (higher accuracy)")
+
+                yield Static("")  # Spacer
+
+                # MLX-specific settings
+                yield Label(
+                    "MLX Model Path:", id="mlx-path-label", classes="mlx-field"
+                )
+                yield Input(
+                    value="~/.cache/mlx_models/mistral-7b-instruct",
+                    placeholder="Path to MLX model directory",
+                    id="mlx-path-input",
+                    classes="mlx-field",
+                )
+
+                yield Label(
+                    "Max Tokens:", id="mlx-tokens-label", classes="mlx-field"
+                )
+                yield Input(
+                    value="2048",
+                    placeholder="Maximum tokens to generate",
+                    id="mlx-tokens-input",
+                    classes="mlx-field",
+                )
+
+                yield Label(
+                    "Random Seed:", id="mlx-seed-label", classes="mlx-field"
+                )
+                yield Input(
+                    value="42",
+                    placeholder="Seed for reproducible generation",
+                    id="mlx-seed-input",
+                    classes="mlx-field",
+                )
+
+                yield Static("")  # Spacer
+
                 with Horizontal(classes="button-row"):
                     yield Button("Save", variant="primary", id="save-settings")
                     yield Button("Cancel", id="cancel-settings")
@@ -271,6 +362,8 @@ class SettingsScreen(ModalScreen):
             "openai-field",
             "anthropic-field",
             "ollama-field",
+            "unsloth-field",
+            "mlx-field",
         ]:
             self._update_field_visibility(field_class, False)
 
@@ -286,6 +379,10 @@ class SettingsScreen(ModalScreen):
             self._update_field_visibility("openai-field", True)
         elif provider == "anthropic":
             self._update_field_visibility("anthropic-field", True)
+        elif provider == "unsloth":
+            self._update_field_visibility("unsloth-field", True)
+        elif provider == "mlx":
+            self._update_field_visibility("mlx-field", True)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle provider selection change"""
@@ -319,6 +416,13 @@ class SettingsScreen(ModalScreen):
                 "#query-expansion-model-input", Input
             )
             expansion_queries_input = self.query_one("#expansion-queries-input", Input)
+            unsloth_model_input = self.query_one("#unsloth-model-input", Input)
+            unsloth_seq_input = self.query_one("#unsloth-seq-input", Input)
+            unsloth_4bit_switch = self.query_one("#unsloth-4bit-switch", Switch)
+            unsloth_8bit_switch = self.query_one("#unsloth-8bit-switch", Switch)
+            mlx_path_input = self.query_one("#mlx-path-input", Input)
+            mlx_tokens_input = self.query_one("#mlx-tokens-input", Input)
+            mlx_seed_input = self.query_one("#mlx-seed-input", Input)
 
             # Validate and parse values
             try:
@@ -343,6 +447,13 @@ class SettingsScreen(ModalScreen):
                     "query_expansion_model": query_expansion_model_input.value
                     or "llama3.2:3b",
                     "expansion_queries": int(expansion_queries_input.value or "3"),
+                    "unsloth_model": unsloth_model_input.value or "unsloth/Qwen2.5-Coder-14B-Instruct",
+                    "unsloth_max_seq_length": int(unsloth_seq_input.value or "8192"),
+                    "unsloth_4bit": unsloth_4bit_switch.value,
+                    "unsloth_8bit": unsloth_8bit_switch.value,
+                    "mlx_model_path": mlx_path_input.value or "~/.cache/mlx_models/mistral-7b-instruct",
+                    "mlx_max_tokens": int(mlx_tokens_input.value or "2048"),
+                    "mlx_seed": int(mlx_seed_input.value or "42"),
                 }
 
                 # Save settings to file first
