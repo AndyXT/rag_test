@@ -263,6 +263,14 @@ class RAGService:
 
         RichLogger.info(f"Settings updated: {list(kwargs.keys())}")
 
+    def start_new_session(self) -> None:
+        """Start a new chat session"""
+        try:
+            self.chat_service.start_new_session()
+            RichLogger.info("New chat session started")
+        except Exception as e:
+            RichLogger.error(f"Error starting new session: {str(e)}")
+
     def reset_system(self) -> None:
         """Reset the entire system"""
         try:
@@ -309,5 +317,9 @@ class RAGService:
 
     def cleanup(self) -> None:
         """Clean up resources"""
+        # Save current chat session before cleanup
+        if hasattr(self, "chat_service"):
+            self.chat_service.close()
+            
         self.query_service.cleanup()
         RichLogger.info("RAG Service cleaned up")

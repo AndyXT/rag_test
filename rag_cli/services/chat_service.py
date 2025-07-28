@@ -16,6 +16,13 @@ class ChatService:
         self.current_session: List[Dict[str, Any]] = []
         self.sessions: List[Dict[str, Any]] = []
         self._load_history()
+        
+        # Ensure we always have a clean session on startup
+        # Save any existing current session from previous run
+        if self.current_session:
+            self._save_current_session()
+            self.current_session = []
+            self._save_history()
 
     def add_message(
         self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None
@@ -333,3 +340,9 @@ class ChatService:
         self.current_session = []
         self._save_history()
         RichLogger.info("Chat history cleared")
+    
+    def close(self) -> None:
+        """Save current session before closing"""
+        if self.current_session:
+            self._save_current_session()
+            RichLogger.info("Current session saved before closing")

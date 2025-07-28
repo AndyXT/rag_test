@@ -40,6 +40,7 @@ class VectorStoreManager:
             CacheManager(),
             self.chunk_size,
             self.chunk_overlap,
+            settings_manager,
         )
 
     def initialize(

@@ -136,6 +136,14 @@ class QueryService:
                     expanded_query, k=retrieval_k
                 )
 
+                # Filter out low-quality documents
+                min_score = self.rag_system.settings_manager.get("min_relevance_score", 0.0)
+                if min_score > 0:
+                    docs = self.query_processor.filter_documents_by_score(docs, min_score)
+                
+                # Always apply content quality filtering
+                docs = self.query_processor.filter_documents_by_score(docs, 0.0)  # Just quality checks
+
                 # Rerank documents if enabled
                 docs = self._rerank_if_enabled(expanded_query, docs)
 

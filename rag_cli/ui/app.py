@@ -599,15 +599,19 @@ class RAGChatApp(App):
 
     async def _execute_query(self, question: str) -> dict:
         """Execute the query with timeout."""
+        # Get timeout from settings
+        timeout = self.settings_manager.get("query_timeout", 60)
+        
         try:
             result = await asyncio.wait_for(
-                self.rag_service.process_query(question), timeout=60.0
+                self.rag_service.process_query(question), timeout=float(timeout)
             )
             return result
         except asyncio.TimeoutError as exc:
             raise Exception(
-                "Query timed out after 60 seconds. "
-                "Try disabling query expansion or reranking in settings."
+                f"Query timed out after {timeout} seconds. "
+                "Try disabling query expansion or reranking in settings, "
+                "or increase the query timeout in settings."
             ) from exc
 
     def _display_context(self, context_docs: list, chat) -> None:
@@ -806,6 +810,13 @@ class RAGChatApp(App):
         history_content.write("[green]🆕 New session started[/green]")
     async def action_quit(self) -> None:
         """Quit the application."""
+        # Save current session and cleanup before quitting
+        try:
+            self.rag_service.cleanup()
+        except Exception as e:
+            # Log but don't prevent exit
+            RichLogger.error(f"Error during cleanup on exit: {str(e)}")
+        
         self.exit()
 
     def action_restart_rag(self) -> None:

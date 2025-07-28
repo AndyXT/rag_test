@@ -23,6 +23,7 @@ class DocumentProcessor:
         cache_manager: CacheManager,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
+        settings_manager=None,
     ):
         """
         Initialize DocumentProcessor.
@@ -33,12 +34,14 @@ class DocumentProcessor:
             cache_manager: Cache management instance
             chunk_size: Size of text chunks
             chunk_overlap: Overlap between chunks
+            settings_manager: Optional settings manager for configuration
         """
         self.pdf_processor = pdf_processor
         self.embeddings_manager = embeddings_manager
         self.cache_manager = cache_manager
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.settings_manager = settings_manager
 
     def process_documents(
         self, docs_path: str, progress_callback: Optional[Callable[[str], None]] = None
@@ -141,7 +144,72 @@ class DocumentProcessor:
             separators=["\n\n", "\n", " ", ""],
         )
 
-        return text_splitter.split_documents(documents)
+        # Split documents
+        split_docs = text_splitter.split_documents(documents)
+        
+        # Filter out small, uninformative chunks
+        min_chunk_size = 100  # Default minimum
+        min_chunk_words = 20  # Default minimum words
+        
+        # Use settings if available
+        if self.settings_manager:
+            min_chunk_size = self.settings_manager.get("min_chunk_size", 100)
+            min_chunk_words = self.settings_manager.get("min_chunk_words", 20)
+        
+        filtered_docs = []
+        
+        for doc in split_docs:
+            content = doc.page_content.strip()
+            
+            # Skip if too short
+            if len(content) < min_chunk_size:
+                RichLogger.debug(f"Skipping small chunk ({len(content)} chars): {content[:50]}...")
+                continue
+                
+            # Skip if it's just whitespace or very sparse
+            if len(content.split()) < min_chunk_words:
+                RichLogger.debug(f"Skipping sparse chunk: {content[:50]}...")
+                continue
+                
+            # Skip if it looks like just headers/TOC entries
+            lines = [line.strip() for line in content.split('\n') if line.strip()]
+            
+            # Check if it's likely just a title or chapter heading
+            if len(lines) <= 3:
+                # Check for common title/chapter patterns
+                title_patterns = [
+                    'chapter', 'section', 'part', 'appendix', 'preface',
+                    'introduction', 'conclusion', 'contents', 'index'
+                ]
+                lower_content = content.lower()
+                
+                # Skip if it matches title patterns
+                if any(pattern in lower_content for pattern in title_patterns) and len(content) < 100:
+                    RichLogger.debug(f"Skipping title/chapter chunk: {content[:50]}...")
+                    continue
+                    
+                # Skip if all lines are short (likely headers)
+                if all(len(line) < 80 for line in lines):
+                    RichLogger.debug(f"Skipping header chunk: {content[:50]}...")
+                    continue
+            
+            # Skip standalone book/document titles
+            if len(lines) == 1 and len(content) < 100:
+                RichLogger.debug(f"Skipping single-line title: {content[:50]}...")
+                continue
+                
+            # Add metadata about chunk quality
+            doc.metadata['chunk_size'] = len(content)
+            doc.metadata['word_count'] = len(content.split())
+            
+            filtered_docs.append(doc)
+        
+        # Log filtering results
+        removed_count = len(split_docs) - len(filtered_docs)
+        if removed_count > 0:
+            RichLogger.info(f"Filtered out {removed_count} small/uninformative chunks")
+        
+        return filtered_docs
 
     def _cleanup_batch(self):
         """Clean up resources after processing a batch."""

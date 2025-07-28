@@ -202,16 +202,52 @@ Answer: """
         filtered = []
 
         for doc in documents:
+            # Check relevance score if available
             if hasattr(doc, "metadata") and "score" in doc.metadata:
-                if doc.metadata["score"] >= min_score:
-                    filtered.append(doc)
-            else:
-                # Include documents without scores
-                filtered.append(doc)
+                if doc.metadata["score"] < min_score:
+                    continue
+            
+            # Additional content quality checks
+            content = doc.page_content.strip()
+            
+            # Skip very short documents
+            if len(content) < 50:
+                RichLogger.debug(f"Skipping short document: {content[:30]}...")
+                continue
+                
+            # Skip documents that are mostly whitespace or numbers
+            words = content.split()
+            if len(words) < 10:
+                RichLogger.debug(f"Skipping sparse document: {content[:30]}...")
+                continue
+                
+            # Check information density (ratio of unique words)
+            unique_words = set(word.lower() for word in words)
+            information_density = len(unique_words) / len(words) if words else 0
+            if information_density < 0.3:  # Too repetitive
+                RichLogger.debug(f"Skipping repetitive document: {content[:30]}...")
+                continue
+            
+            # Skip likely title/header chunks at retrieval time
+            lines = [line.strip() for line in content.split('\n') if line.strip()]
+            if len(lines) <= 2:
+                # Check for title-like content
+                title_indicators = ['chapter', 'section', 'part', 'book', 'title', 'contents']
+                lower_content = content.lower()
+                if any(indicator in lower_content for indicator in title_indicators):
+                    RichLogger.debug(f"Skipping title-like document: {content[:50]}...")
+                    continue
+                
+                # Skip if it's just a short phrase with no substantial content
+                if len(words) < 15 and not any(len(word) > 15 for word in words):
+                    RichLogger.debug(f"Skipping brief header: {content[:50]}...")
+                    continue
+            
+            filtered.append(doc)
 
         if len(filtered) < len(documents):
             RichLogger.info(
-                f"Filtered {len(documents) - len(filtered)} documents below score threshold {min_score}"
+                f"Filtered {len(documents) - len(filtered)} documents (score/quality threshold)"
             )
 
         return filtered

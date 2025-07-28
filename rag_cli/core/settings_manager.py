@@ -21,6 +21,8 @@ class SettingsManager:
             "temperature": 0.1,
             "chunk_size": 1000,
             "chunk_overlap": 200,
+            "min_chunk_size": 100,  # Minimum chunk size to keep (filters out small fragments)
+            "min_chunk_words": 20,  # Minimum number of words in a chunk
             "retrieval_k": 3,
             "auto_save": True,
             "dark_mode": False,
@@ -36,6 +38,9 @@ class SettingsManager:
             "api_base_url": "",  # For custom API endpoints
             "openai_model": "gpt-3.5-turbo",  # For OpenAI
             "anthropic_model": "claude-3-haiku-20240307",  # For Anthropic
+            "min_relevance_score": 0.0,  # Minimum relevance score for retrieved documents
+            "deduplicate_docs": True,  # Remove duplicate documents from results
+            "query_timeout": 60,  # Query timeout in seconds
         }
         self.settings = self.load_settings()
 
